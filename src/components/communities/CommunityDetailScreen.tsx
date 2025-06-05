@@ -1,25 +1,23 @@
-// src/components/communities/CommunityDetailScreen.tsx
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'; // Ensure CardTitle is used or remove if not
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import BottomNavigation from '@/components/layout/BottomNavigation';
-import PostListItem from './PostListItem';
+import PostListItem from './PostListItem'; // Assuming this exists and is correctly typed
 import CreatePostScreen from './CreatePostScreen';
 import { ChevronLeft, Users, MessageSquare, Loader2, Edit3 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import apiClient, { PaginatedResponse } from '@/lib/apiClient';
 import { toast } from '@/hooks/use-toast';
-import { CommunityDetail, Post, CommunityDetailApiResponse, JoinLeaveApiResponse, VoteApiResponse, Author as PostAuthor } from '@/types/community'; // Ensure correct import
+import { CommunityDetail, Post, VoteApiResponse } from '@/types/community'; // Ensure correct import
 
 // Helper to normalize community data from API (handles snake_case and defaults)
 const normalizeCommunityData = (apiCommunity: any): CommunityDetail => {
     const id = apiCommunity.id || apiCommunity._id;
     if (!id) {
         console.error("Normalization Error: Community data missing ID", apiCommunity);
-        // Throw an error or return a structure indicating failure to normalize
         throw new Error("Community data from API is missing a valid ID.");
     }
     return {
@@ -28,8 +26,8 @@ const normalizeCommunityData = (apiCommunity: any): CommunityDetail => {
         name: apiCommunity.name || "Unnamed Community",
         description: apiCommunity.description || "",
         slug: apiCommunity.slug,
-        icon: apiCommunity.icon_url || apiCommunity.icon,
-        bannerImage: apiCommunity.banner_image_url || apiCommunity.bannerImage,
+        icon: apiCommunity.icon_url || apiCommunity.icon, // Expecting full URL
+        bannerImage: apiCommunity.banner_image_url || apiCommunity.bannerImage, // Expecting full URL
         memberCount: apiCommunity.member_count ?? apiCommunity.memberCount ?? 0,
         postCount: apiCommunity.post_count ?? apiCommunity.postCount ?? 0,
         is_member: apiCommunity.is_member ?? false,
@@ -54,11 +52,15 @@ const normalizePostData = (apiPost: any): Post => {
         imageUrl: apiPost.image_url,
         linkUrl: apiPost.link_url,
         tags: apiPost.tags || [],
-        author: apiPost.author || { id: 'unknown', name: 'Unknown Author' },
-        communityId: apiPost.communityId || apiPost.community?.id, // Ensure communityId is present
-        community: apiPost.community,
+        author: apiPost.author || { id: 'unknown', name: 'Unknown Author', usn: 'N/A' },
+        communityId: apiPost.communityId || apiPost.community?.id,
+        communityName: apiPost.communityName || apiPost.community?.name,
+        communitySlug: apiPost.communitySlug || apiPost.community?.slug,
+        communityIcon: apiPost.communityIcon || apiPost.community?.icon,
+        community: apiPost.community, // Make sure this is fully populated or handled
         createdAt: apiPost.created_at || apiPost.createdAt || new Date().toISOString(),
         updatedAt: apiPost.updated_at || apiPost.updatedAt,
+        lastActivityAt: apiPost.lastActivityAt || apiPost.last_activity_at,
         upvotes: apiPost.upvotes ?? 0,
         downvotes: apiPost.downvotes ?? 0,
         commentCount: apiPost.comment_count ?? apiPost.commentCount ?? 0,
@@ -70,7 +72,7 @@ const normalizePostData = (apiPost: any): Post => {
 const CommunityDetailScreen = () => {
   const { communityId: communityIdOrSlug } = useParams<{ communityId: string }>();
   const navigate = useNavigate();
-  const { isAuthenticated, isLoading: authIsLoading } = useAuth();
+  const { user, isAuthenticated, isLoading: authIsLoading } = useAuth();
 
   const [community, setCommunity] = useState<CommunityDetail | null>(null);
   const [posts, setPosts] = useState<Post[]>([]);
@@ -91,22 +93,17 @@ const CommunityDetailScreen = () => {
     }
     setIsLoadingCommunity(true);
     try {
-      const response = await apiClient<{ status: string; data: { community: any } }>(`/communities/${communityIdOrSlug}`); // Use 'any' for raw fetch
-      
-      // console.log("RAW Community Detail API Response:", JSON.stringify(response, null, 2));
-
+      const response = await apiClient<{ status: string; data: { community: any } }>(`/communities/${communityIdOrSlug}`);
       const rawCommunityData = response.data?.community;
 
       if (response.status === 'success' && rawCommunityData) {
         const normalizedCommunity = normalizeCommunityData(rawCommunityData);
         setCommunity(normalizedCommunity);
       } else {
-        console.warn("Community detail fetch: Success status but data.community or critical fields missing. Full Response:", response);
         toast({ title: "Error", description: (response as any).message || "Community not found or data incomplete.", variant: "destructive" });
         navigate('/communities', { replace: true });
       }
     } catch (error: any) {
-      console.error("Error fetching community details (catch block):", error);
       toast({ title: "Fetch Error", description: error.message || "Failed to load community details.", variant: "destructive" });
       navigate('/communities', { replace: true });
     } finally {
@@ -121,6 +118,7 @@ const CommunityDetailScreen = () => {
         return;
     }
     if (page === 1) setIsLoadingPosts(true);
+    else setIsLoadingPosts(false); // For subsequent loads, don't show full page loader
 
     const params = new URLSearchParams();
     params.append('page', page.toString());
@@ -128,34 +126,36 @@ const CommunityDetailScreen = () => {
     params.append('sortBy', currentSortBy);
 
     try {
-      const response = await apiClient<PaginatedResponse<any>>(`/communities/${actualCommunityId}/posts?${params.toString()}`); // Use 'any' for raw fetch
+      const response = await apiClient<PaginatedResponse<any>>(`/communities/${actualCommunityId}/posts?${params.toString()}`);
       if (response.status === 'success' && Array.isArray(response.data)) {
         const normalizedPosts = response.data.map(normalizePostData);
         setPosts(prev => page === 1 ? normalizedPosts : [...prev, ...normalizedPosts]);
-        const itemsPerPage = 10;
-        setTotalPostsPages(response.results ? Math.ceil(response.results / itemsPerPage) : page + (response.data.length < itemsPerPage ? 0 : 1));
-        setCurrentPostsPage(page);
+        const itemsPerPage = response.pagination?.perPage || 10;
+        setTotalPostsPages(response.pagination?.totalPages || Math.ceil((response.results || 0) / itemsPerPage));
+        setCurrentPostsPage(response.pagination?.currentPage || page);
       } else {
         if (page === 1) setPosts([]);
-        toast({ title: "Posts", description: (response as any).message || "Could not load posts.", variant: "default" });
+        // toast({ title: "Posts", description: (response as any).message || "Could not load posts.", variant: "default" });
       }
     } catch (error: any) {
       if (page === 1) setPosts([]);
       toast({ title: "Error Fetching Posts", description: error.message || "Failed to fetch posts.", variant: "destructive" });
     } finally {
-      if (page === 1) setIsLoadingPosts(false);
+      setIsLoadingPosts(false);
     }
   }, [community?.id, sortBy]);
 
   useEffect(() => {
-    fetchCommunityDetails();
-  }, [communityIdOrSlug, fetchCommunityDetails]);
+    if (!authIsLoading) { // Only fetch if auth state is resolved
+        fetchCommunityDetails();
+    }
+  }, [communityIdOrSlug, authIsLoading, fetchCommunityDetails]);
 
   useEffect(() => {
-    if (community?.id) {
+    if (community?.id && !authIsLoading) { // And auth state resolved
       fetchPosts(1, community.id, sortBy);
     }
-  }, [community?.id, sortBy, fetchPosts]);
+  }, [community?.id, sortBy, authIsLoading, fetchPosts]);
 
   const handleJoinLeave = async () => {
     if (!community || !community.id) {
@@ -174,17 +174,16 @@ const CommunityDetailScreen = () => {
     const originalMemberCount = community.memberCount;
     const actionEndpoint = community.is_member ? `/communities/${community.id}/leave` : `/communities/${community.id}/join`;
     
-    setCommunity(prev => prev ? ({ ...prev, is_member: !prev.is_member, memberCount: prev.is_member ? (prev.memberCount ?? 1) - 1 : (prev.memberCount ?? 0) + 1 }) : null);
+    setCommunity(prev => prev ? ({ ...prev, is_member: !prev.is_member, memberCount: prev.is_member ? Math.max(0, (prev.memberCount ?? 1) - 1) : (prev.memberCount ?? 0) + 1 }) : null);
 
     try {
-      const response = await apiClient<{ status: string; message?: string; data?: { community: any } }>(actionEndpoint, { method: 'POST' }); // Use 'any' for raw fetch
+      const response = await apiClient<{ status: string; message?: string; data?: { community: any } }>(actionEndpoint, { method: 'POST' });
       if (response.status === 'success') {
         toast({ title: "Success", description: response.message || `Successfully ${originalIsMember ? 'left' : 'joined'}!` });
         if (response.data?.community) {
             setCommunity(normalizeCommunityData(response.data.community));
         } else {
-            // If API doesn't return full community object on join/leave, just refetch for consistency
-            fetchCommunityDetails();
+            fetchCommunityDetails(); // Refetch for consistency if full object not returned
         }
       } else {
         throw new Error(response.message || "Action failed");
@@ -200,20 +199,18 @@ const CommunityDetailScreen = () => {
   const handleCreatePostModalOpen = () => setIsCreatePostOpen(true);
   const handleCreatePostModalClose = () => setIsCreatePostOpen(false);
 
-  const handlePostCreated = (newPostData?: any) => { // newPostData can be the raw API response
+  const handlePostCreated = (newPostData?: any) => {
     setIsCreatePostOpen(false);
     toast({title: "Post Created!", description: "Your post has been submitted."});
     if(community?.id) {
-        // If newPostData is the actual post object, normalize and prepend
         if (newPostData && (newPostData.id || newPostData._id)) {
             const normalizedNewPost = normalizePostData(newPostData);
-            setPosts(prev => [normalizedNewPost, ...prev]);
+            setPosts(prev => [normalizedNewPost, ...prev]); // Prepend new post
             setCommunity(prev => prev ? ({...prev, postCount: (prev.postCount || 0) + 1}) : null);
         } else {
-            // Otherwise, just re-fetch
-            setSortBy('new');
-            fetchPosts(1, community.id, 'new');
-            if (community) setCommunity(prev => prev ? ({...prev, postCount: (prev.postCount || 0) + 1}) : null);
+            setSortBy('new'); // Reset sort to new to see the latest post
+            fetchPosts(1, community.id, 'new'); // Refetch posts
+            // Assuming backend updates postCount on community, or fetchCommunityDetails() if not
         }
     }
   };
@@ -224,11 +221,11 @@ const CommunityDetailScreen = () => {
     ));
   };
 
-  if (authIsLoading || isLoadingCommunity) {
+  if (authIsLoading || (isLoadingCommunity && !community) ) { // Show loading if auth is loading OR community is loading and not yet available
     return <div className="flex items-center justify-center min-h-screen"><Loader2 className="h-8 w-8 animate-spin text-unicampus-red" /> Loading Community...</div>;
   }
   if (!community) {
-    return <div className="flex items-center justify-center min-h-screen p-4 text-center">Community not found. Please check the URL or try again.</div>;
+    return <div className="flex flex-col items-center justify-center min-h-screen p-4 text-center">Community not found. Please check the URL or try again. <Button variant="link" className="mt-2" onClick={() => navigate('/communities')}>Go to Communities</Button></div>;
   }
 
   return (
@@ -243,15 +240,24 @@ const CommunityDetailScreen = () => {
         </div>
       </div>
 
-      <div className="space-y-0">
-        <Card className="mx-0 rounded-none border-x-0 border-t-0 dark:border-gray-800">
+      <div className="space-y-0"> {/* Consider removing space-y-0 if Card has margin */}
+        <Card className="mx-0 rounded-none border-x-0 border-t-0 dark:border-gray-800"> {/* No top/bottom margin if part of a continuous flow */}
           <CardContent className="p-0">
             {community.bannerImage && (
-              <div className="h-32 sm:h-48 w-full overflow-hidden"> <img src={community.bannerImage} alt={community.name} className="w-full h-full object-cover" /> </div>
+              <div className="h-32 sm:h-48 w-full overflow-hidden">
+                <img src={community.bannerImage} alt={`${community.name} banner`} className="w-full h-full object-cover" />
+              </div>
             )}
             <div className="p-4">
               <div className="flex flex-col sm:flex-row items-start sm:space-x-4">
-                <div className="text-5xl sm:text-6xl -mt-8 sm:-mt-10 mb-2 sm:mb-0 bg-gray-200 dark:bg-gray-700 rounded-full p-1 border-4 border-white dark:border-gray-900 w-20 h-20 sm:w-24 sm:h-24 flex items-center justify-center flex-shrink-0"> {community.icon || '👥'} </div>
+                {/* --- ICON DISPLAY FIXED --- */}
+                <div className="bg-gray-200 dark:bg-gray-700 rounded-full border-4 border-white dark:border-gray-900 w-20 h-20 sm:w-24 sm:h-24 flex items-center justify-center flex-shrink-0 overflow-hidden -mt-8 sm:-mt-10 mb-2 sm:mb-0">
+                  {community.icon ? (
+                    <img src={community.icon} alt={`${community.name} icon`} className="w-full h-full object-cover" />
+                  ) : (
+                    <span className="text-4xl sm:text-5xl text-gray-500 dark:text-gray-400">👥</span>
+                  )}
+                </div>
                 <div className="flex-1 mt-1">
                   <h2 className="font-bold text-2xl text-gray-900 dark:text-white">{community.name}</h2>
                   <p className="text-gray-600 dark:text-gray-400 mt-1 text-sm">{community.description}</p>
@@ -283,10 +289,10 @@ const CommunityDetailScreen = () => {
           </CardContent>
         </Card>
 
-        <div className="p-4 space-y-3">
+        <div className="p-4 space-y-3"> {/* This adds padding around the posts list */}
           <div className="flex justify-between items-center mb-3">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Posts</h3>
-            <Select value={sortBy} onValueChange={(value: 'new' | 'hot' | 'top') => setSortBy(value)} disabled={isLoadingPosts}>
+            <Select value={sortBy} onValueChange={(value: 'new' | 'hot' | 'top') => setSortBy(value)} disabled={isLoadingPosts && posts.length > 0}> {/* Allow changing sort even if loading more, but not initial load */}
                 <SelectTrigger className="w-[120px] h-8 text-xs dark:bg-gray-800 dark:border-gray-700"> <SelectValue placeholder="Sort by" /> </SelectTrigger>
                 <SelectContent className="dark:bg-gray-800">
                     <SelectItem value="new">Newest</SelectItem>
@@ -296,10 +302,10 @@ const CommunityDetailScreen = () => {
             </Select>
           </div>
 
-          {isLoadingPosts && posts.length === 0 ? (
+          {isLoadingPosts && posts.length === 0 ? ( // Only show full loader if no posts are visible yet
             <div className="text-center py-8"><Loader2 className="h-6 w-6 animate-spin text-unicampus-red mx-auto" /> Loading posts...</div>
           ) : posts.length > 0 ? (
-            posts.map((post, index) => (
+            posts.map((post, index) => ( // Add index if PostListItem uses it, otherwise remove
               <PostListItem key={post.id} post={post} index={index} onClick={() => navigate(`/posts/${post.id}`)} onVoteChange={handlePostVoteChange} />
             ))
           ) : (
@@ -311,11 +317,16 @@ const CommunityDetailScreen = () => {
               </CardContent>
             </Card>
           )}
-          {!isLoadingPosts && currentPostsPage < totalPostsPages && posts.length > 0 && (
-            <div className="text-center mt-6"><Button variant="outline" onClick={() => fetchPosts(currentPostsPage + 1, community.id, sortBy)} disabled={isLoadingPosts}>
-            {isLoadingPosts && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Load More Posts</Button></div>
+          {/* Load More Button - Show if not initial loading AND there are more pages AND some posts exist */}
+          {! (isLoadingPosts && posts.length === 0) && currentPostsPage < totalPostsPages && posts.length > 0 && (
+            <div className="text-center mt-6">
+                <Button variant="outline" onClick={() => fetchPosts(currentPostsPage + 1, community.id, sortBy)} disabled={isLoadingPosts}>
+                    {isLoadingPosts && <Loader2 className="mr-2 h-4 w-4 animate-spin" />} Load More Posts
+                </Button>
+            </div>
           )}
-           {!isLoadingPosts && posts.length > 0 && currentPostsPage >= totalPostsPages && (
+           {/* End of Posts Message - Show if not initial loading AND no more pages AND some posts exist */}
+           {! (isLoadingPosts && posts.length === 0) && posts.length > 0 && currentPostsPage >= totalPostsPages && (
              <p className="text-center text-sm text-gray-500 dark:text-gray-400 mt-6">You've seen all posts!</p>
            )}
         </div>
