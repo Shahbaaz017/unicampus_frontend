@@ -1,17 +1,18 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'; // Ensure CardTitle is used or remove if not
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import BottomNavigation from '@/components/layout/BottomNavigation';
-import PostListItem from './PostListItem'; // Assuming this exists and is correctly typed
+import PostListItem from './PostListItem';
 import CreatePostScreen from './CreatePostScreen';
-import { ChevronLeft, Users, MessageSquare, Loader2, Edit3 } from 'lucide-react';
+import { ChevronLeft, Users, MessageSquare, Loader2, Edit3, Edit as EditIcon } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import apiClient, { PaginatedResponse } from '@/lib/apiClient';
 import { toast } from '@/hooks/use-toast';
-import { CommunityDetail, Post, VoteApiResponse } from '@/types/community'; // Ensure correct import
+// RESOLVED Conflict 1:
+import { CommunityDetail, Post, CommunityDetailApiResponse, JoinLeaveApiResponse, VoteApiResponse, Author as PostAuthor } from '@/types/community';
 
 // Helper to normalize community data from API (handles snake_case and defaults)
 const normalizeCommunityData = (apiCommunity: any): CommunityDetail => {
@@ -26,8 +27,8 @@ const normalizeCommunityData = (apiCommunity: any): CommunityDetail => {
         name: apiCommunity.name || "Unnamed Community",
         description: apiCommunity.description || "",
         slug: apiCommunity.slug,
-        icon: apiCommunity.icon_url || apiCommunity.icon, // Expecting full URL
-        bannerImage: apiCommunity.banner_image_url || apiCommunity.bannerImage, // Expecting full URL
+        icon: apiCommunity.icon_url || apiCommunity.icon,
+        bannerImage: apiCommunity.banner_image_url || apiCommunity.bannerImage,
         memberCount: apiCommunity.member_count ?? apiCommunity.memberCount ?? 0,
         postCount: apiCommunity.post_count ?? apiCommunity.postCount ?? 0,
         is_member: apiCommunity.is_member ?? false,
@@ -35,6 +36,7 @@ const normalizeCommunityData = (apiCommunity: any): CommunityDetail => {
         rules: apiCommunity.rules || [],
         createdAt: apiCommunity.created_at || apiCommunity.createdAt,
         updatedAt: apiCommunity.updated_at || apiCommunity.updatedAt,
+        // createdBy: apiCommunity.created_by || apiCommunity.createdBy, // Add if your API provides this
     };
 };
 
@@ -52,12 +54,13 @@ const normalizePostData = (apiPost: any): Post => {
         imageUrl: apiPost.image_url,
         linkUrl: apiPost.link_url,
         tags: apiPost.tags || [],
+        // RESOLVED Conflict 2:
         author: apiPost.author || { id: 'unknown', name: 'Unknown Author', usn: 'N/A' },
         communityId: apiPost.communityId || apiPost.community?.id,
         communityName: apiPost.communityName || apiPost.community?.name,
         communitySlug: apiPost.communitySlug || apiPost.community?.slug,
         communityIcon: apiPost.communityIcon || apiPost.community?.icon,
-        community: apiPost.community, // Make sure this is fully populated or handled
+        community: apiPost.community,
         createdAt: apiPost.created_at || apiPost.createdAt || new Date().toISOString(),
         updatedAt: apiPost.updated_at || apiPost.updatedAt,
         lastActivityAt: apiPost.lastActivityAt || apiPost.last_activity_at,
@@ -72,6 +75,7 @@ const normalizePostData = (apiPost: any): Post => {
 const CommunityDetailScreen = () => {
   const { communityId: communityIdOrSlug } = useParams<{ communityId: string }>();
   const navigate = useNavigate();
+  // RESOLVED Conflict 3:
   const { user, isAuthenticated, isLoading: authIsLoading } = useAuth();
 
   const [community, setCommunity] = useState<CommunityDetail | null>(null);
@@ -85,6 +89,25 @@ const CommunityDetailScreen = () => {
   const [totalPostsPages, setTotalPostsPages] = useState(1);
   const [sortBy, setSortBy] = useState<'new' | 'hot' | 'top'>('new');
 
+  // Ownership Check Logic
+  // Ensure your CommunityDetail type includes `createdBy` and it's populated by `normalizeCommunityData`
+  // And `user.id` from `useAuth` is the correct field (e.g., user._id or user.id)
+  const isOwner = isAuthenticated && user && community && community.createdBy && user.id === community.createdBy;
+  // const isOwner = true; // TEMPORARY for UI testing if backend/auth data is not ready
+
+
+  const handleEditCommunity = () => {
+    if (!community || !isOwner) return; // Second check for safety though button visibility should handle it
+    toast({
+        title: "Edit Community (Mock)",
+        description: `Navigating to edit form for "${community.name}".`
+    });
+    // Example navigation:
+    // navigate(`/communities/${community.id}/edit`);
+    // Or open a modal for editing
+  };
+
+
   const fetchCommunityDetails = useCallback(async () => {
     if (!communityIdOrSlug) {
         toast({ title: "Navigation Error", description: "Community identifier is missing.", variant: "destructive" });
@@ -95,7 +118,6 @@ const CommunityDetailScreen = () => {
     try {
       const response = await apiClient<{ status: string; data: { community: any } }>(`/communities/${communityIdOrSlug}`);
       const rawCommunityData = response.data?.community;
-
       if (response.status === 'success' && rawCommunityData) {
         const normalizedCommunity = normalizeCommunityData(rawCommunityData);
         setCommunity(normalizedCommunity);
@@ -118,7 +140,7 @@ const CommunityDetailScreen = () => {
         return;
     }
     if (page === 1) setIsLoadingPosts(true);
-    else setIsLoadingPosts(false); // For subsequent loads, don't show full page loader
+    // else setIsLoadingPosts(false); // Consider if you want a "load more" specific spinner
 
     const params = new URLSearchParams();
     params.append('page', page.toString());
@@ -135,24 +157,24 @@ const CommunityDetailScreen = () => {
         setCurrentPostsPage(response.pagination?.currentPage || page);
       } else {
         if (page === 1) setPosts([]);
-        // toast({ title: "Posts", description: (response as any).message || "Could not load posts.", variant: "default" });
       }
     } catch (error: any) {
       if (page === 1) setPosts([]);
       toast({ title: "Error Fetching Posts", description: error.message || "Failed to fetch posts.", variant: "destructive" });
     } finally {
+      // RESOLVED Conflict 4:
       setIsLoadingPosts(false);
     }
   }, [community?.id, sortBy]);
 
   useEffect(() => {
-    if (!authIsLoading) { // Only fetch if auth state is resolved
+    if (!authIsLoading) {
         fetchCommunityDetails();
     }
   }, [communityIdOrSlug, authIsLoading, fetchCommunityDetails]);
 
   useEffect(() => {
-    if (community?.id && !authIsLoading) { // And auth state resolved
+    if (community?.id && !authIsLoading) {
       fetchPosts(1, community.id, sortBy);
     }
   }, [community?.id, sortBy, authIsLoading, fetchPosts]);
@@ -180,6 +202,7 @@ const CommunityDetailScreen = () => {
       const response = await apiClient<{ status: string; message?: string; data?: { community: any } }>(actionEndpoint, { method: 'POST' });
       if (response.status === 'success') {
         toast({ title: "Success", description: response.message || `Successfully ${originalIsMember ? 'left' : 'joined'}!` });
+        // RESOLVED Conflict 5 (identical code):
         if (response.data?.community) {
             setCommunity(normalizeCommunityData(response.data.community));
         } else {
@@ -203,14 +226,15 @@ const CommunityDetailScreen = () => {
     setIsCreatePostOpen(false);
     toast({title: "Post Created!", description: "Your post has been submitted."});
     if(community?.id) {
+        // RESOLVED Conflict 6:
         if (newPostData && (newPostData.id || newPostData._id)) {
             const normalizedNewPost = normalizePostData(newPostData);
-            setPosts(prev => [normalizedNewPost, ...prev]); // Prepend new post
+            setPosts(prev => [normalizedNewPost, ...prev]);
             setCommunity(prev => prev ? ({...prev, postCount: (prev.postCount || 0) + 1}) : null);
         } else {
-            setSortBy('new'); // Reset sort to new to see the latest post
-            fetchPosts(1, community.id, 'new'); // Refetch posts
-            // Assuming backend updates postCount on community, or fetchCommunityDetails() if not
+            setSortBy('new');
+            fetchPosts(1, community.id, 'new');
+            if (community) setCommunity(prev => prev ? ({...prev, postCount: (prev.postCount || 0) + 1}) : null);
         }
     }
   };
@@ -221,7 +245,7 @@ const CommunityDetailScreen = () => {
     ));
   };
 
-  if (authIsLoading || (isLoadingCommunity && !community) ) { // Show loading if auth is loading OR community is loading and not yet available
+  if (authIsLoading || (isLoadingCommunity && !community) ) {
     return <div className="flex items-center justify-center min-h-screen"><Loader2 className="h-8 w-8 animate-spin text-unicampus-red" /> Loading Community...</div>;
   }
   if (!community) {
@@ -240,9 +264,10 @@ const CommunityDetailScreen = () => {
         </div>
       </div>
 
-      <div className="space-y-0"> {/* Consider removing space-y-0 if Card has margin */}
-        <Card className="mx-0 rounded-none border-x-0 border-t-0 dark:border-gray-800"> {/* No top/bottom margin if part of a continuous flow */}
+      <div className="space-y-0">
+        <Card className="mx-0 rounded-none border-x-0 border-t-0 dark:border-gray-800">
           <CardContent className="p-0">
+            {/* RESOLVED Conflict 7 (identical code, kept more readable version): */}
             {community.bannerImage && (
               <div className="h-32 sm:h-48 w-full overflow-hidden">
                 <img src={community.bannerImage} alt={`${community.name} banner`} className="w-full h-full object-cover" />
@@ -250,7 +275,6 @@ const CommunityDetailScreen = () => {
             )}
             <div className="p-4">
               <div className="flex flex-col sm:flex-row items-start sm:space-x-4">
-                {/* --- ICON DISPLAY FIXED --- */}
                 <div className="bg-gray-200 dark:bg-gray-700 rounded-full border-4 border-white dark:border-gray-900 w-20 h-20 sm:w-24 sm:h-24 flex items-center justify-center flex-shrink-0 overflow-hidden -mt-8 sm:-mt-10 mb-2 sm:mb-0">
                   {community.icon ? (
                     <img src={community.icon} alt={`${community.name} icon`} className="w-full h-full object-cover" />
@@ -266,15 +290,29 @@ const CommunityDetailScreen = () => {
                     <span className="flex items-center"><MessageSquare className="h-4 w-4 mr-1" /> {(community.postCount ?? 0).toLocaleString()} posts</span>
                   </div>
                 </div>
-                {isAuthenticated && (
-                    <Button
-                    variant={community.is_member ? "default" : "outline"}
-                    size="sm"
-                    onClick={handleJoinLeave}
-                    disabled={isProcessingJoinLeave}
-                    className={`mt-2 sm:mt-0 ${community.is_member ? "bg-unicampus-red text-white hover:bg-unicampus-red-dark" : "border-unicampus-red text-unicampus-red hover:bg-unicampus-red hover:text-white dark:border-unicampus-red dark:text-unicampus-red dark:hover:bg-unicampus-red dark:hover:text-white"}`}
-                    > {isProcessingJoinLeave ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : (community.is_member ? 'Joined' : 'Join Community')} </Button>
-                )}
+                <div className="flex items-center space-x-2 mt-2 sm:mt-0 flex-shrink-0">
+                    {isAuthenticated && (
+                        <Button
+                        variant={community.is_member ? "default" : "outline"}
+                        size="sm"
+                        onClick={handleJoinLeave}
+                        disabled={isProcessingJoinLeave}
+                        className={` ${community.is_member ? "bg-unicampus-red text-white hover:bg-unicampus-red-dark" : "border-unicampus-red text-unicampus-red hover:bg-unicampus-red hover:text-white dark:border-unicampus-red dark:text-unicampus-red dark:hover:bg-unicampus-red dark:hover:text-white"}`}
+                        > {isProcessingJoinLeave ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : (community.is_member ? 'Joined' : 'Join Community')} </Button>
+                    )}
+                    {isOwner && (
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleEditCommunity}
+                            className="dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+                            title="Update Community Details"
+                        >
+                            <EditIcon className="mr-1.5 h-4 w-4" />
+                            Update
+                        </Button>
+                    )}
+                </div>
               </div>
               {community.tags && community.tags.length > 0 && (
                 <div className="mt-3 flex flex-wrap gap-1.5"> {community.tags.map(tag => (<Badge key={tag} variant="secondary" className="text-xs">{tag}</Badge>))} </div>
@@ -289,10 +327,11 @@ const CommunityDetailScreen = () => {
           </CardContent>
         </Card>
 
+        {/* RESOLVED Conflict 8 (identical code, kept more descriptive comment): */}
         <div className="p-4 space-y-3"> {/* This adds padding around the posts list */}
           <div className="flex justify-between items-center mb-3">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Posts</h3>
-            <Select value={sortBy} onValueChange={(value: 'new' | 'hot' | 'top') => setSortBy(value)} disabled={isLoadingPosts && posts.length > 0}> {/* Allow changing sort even if loading more, but not initial load */}
+            <Select value={sortBy} onValueChange={(value: 'new' | 'hot' | 'top') => setSortBy(value)} disabled={isLoadingPosts && posts.length > 0}>
                 <SelectTrigger className="w-[120px] h-8 text-xs dark:bg-gray-800 dark:border-gray-700"> <SelectValue placeholder="Sort by" /> </SelectTrigger>
                 <SelectContent className="dark:bg-gray-800">
                     <SelectItem value="new">Newest</SelectItem>
@@ -302,10 +341,10 @@ const CommunityDetailScreen = () => {
             </Select>
           </div>
 
-          {isLoadingPosts && posts.length === 0 ? ( // Only show full loader if no posts are visible yet
+          {isLoadingPosts && posts.length === 0 ? (
             <div className="text-center py-8"><Loader2 className="h-6 w-6 animate-spin text-unicampus-red mx-auto" /> Loading posts...</div>
           ) : posts.length > 0 ? (
-            posts.map((post, index) => ( // Add index if PostListItem uses it, otherwise remove
+            posts.map((post, index) => (
               <PostListItem key={post.id} post={post} index={index} onClick={() => navigate(`/posts/${post.id}`)} onVoteChange={handlePostVoteChange} />
             ))
           ) : (
@@ -317,7 +356,6 @@ const CommunityDetailScreen = () => {
               </CardContent>
             </Card>
           )}
-          {/* Load More Button - Show if not initial loading AND there are more pages AND some posts exist */}
           {! (isLoadingPosts && posts.length === 0) && currentPostsPage < totalPostsPages && posts.length > 0 && (
             <div className="text-center mt-6">
                 <Button variant="outline" onClick={() => fetchPosts(currentPostsPage + 1, community.id, sortBy)} disabled={isLoadingPosts}>
@@ -325,7 +363,6 @@ const CommunityDetailScreen = () => {
                 </Button>
             </div>
           )}
-           {/* End of Posts Message - Show if not initial loading AND no more pages AND some posts exist */}
            {! (isLoadingPosts && posts.length === 0) && posts.length > 0 && currentPostsPage >= totalPostsPages && (
              <p className="text-center text-sm text-gray-500 dark:text-gray-400 mt-6">You've seen all posts!</p>
            )}
