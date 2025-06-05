@@ -1,0 +1,1178 @@
+Frontend files for Delete Post/Comment API integration - Collected on Wed Jun  4 16:03:08 UTC 2025
+===============================================================================
+
+--- START OF FILE: src/components/communities/PostListItem.tsx ---
+// src/components/communities/PostListItem.tsx
+import React, { useState, MouseEvent, useEffect } from 'react'; // Added useEffect
+import { useNavigate } from 'react-router-dom'; // For navigating to community from badge
+import { Card, CardContent } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Badge } from '@/components/ui/badge';
+import { ChevronUp, ChevronDown, MessageSquare, ExternalLink } from 'lucide-react';
+import apiClient from '@/lib/apiClient';
+import { useAuth } from '@/contexts/AuthContext';
+import { toast } from '@/hooks/use-toast';
+import { Post, Author, CommunitySummary, VoteApiResponse } from '@/types/community'; // Assuming types are defined in src/types/community.ts
+
+interface PostListItemProps {
+  post: Post;
+  index: number;
+  showCommunity?: boolean;
+  onClick: () => void; // For navigating to post detail
+  onVoteChange?: (postId: string, newVoteData: VoteApiResponse['data']) => void;
+}
+
+const PostListItem: React.FC<PostListItemProps> = ({ post, index, showCommunity = false, onClick, onVoteChange }) => {
+  const { isAuthenticated } = useAuth();
+  const navigate = useNavigate();
+
+  const [userVote, setUserVote] = useState<'up' | 'down' | null>(post.user_vote);
+  const [score, setScore] = useState((post.upvotes ?? 0) - (post.downvotes ?? 0)); // Calculate net score
+  const [isVoting, setIsVoting] = useState(false);
+
+  useEffect(() => {
+    setUserVote(post.user_vote);
+    setScore((post.upvotes ?? 0) - (post.downvotes ?? 0));
+  }, [post.user_vote, post.upvotes, post.downvotes]);
+
+  const handleVote = async (voteDirectionAttempt: 'up' | 'down', e: MouseEvent) => {
+    e.stopPropagation();
+    if (!isAuthenticated) {
+      toast({ title: "Authentication Required", description: "Please log in to vote.", variant: "destructive"});
+      return;
+    }
+    if (isVoting) return;
+    setIsVoting(true);
+
+    const originalUserVote = userVote;
+    const originalScore = score;
+
+    let newApiDirection: 'up' | 'down' | 'none';
+    if (userVote === voteDirectionAttempt) { // Clicking the same button to undo vote
+      newApiDirection = 'none';
+    } else {
+      newApiDirection = voteDirectionAttempt;
+    }
+
+    // Optimistic UI Update
+    let newOptimisticScore = score;
+    if (newApiDirection === 'none') { // Clearing a vote
+        if (originalUserVote === 'up') newOptimisticScore--;
+        if (originalUserVote === 'down') newOptimisticScore++;
+        setUserVote(null);
+    } else { // Setting or changing a vote
+        if (originalUserVote === 'up') newOptimisticScore--; // Remove previous upvote effect
+        else if (originalUserVote === 'down') newOptimisticScore++; // Remove previous downvote effect
+
+        if (newApiDirection === 'up') newOptimisticScore++;
+        else if (newApiDirection === 'down') newOptimisticScore--;
+        setUserVote(newApiDirection);
+    }
+    setScore(newOptimisticScore);
+
+    try {
+      const response = await apiClient<VoteApiResponse>(`/posts/${post.id}/vote`, {
+        method: 'POST',
+        data: { direction: newApiDirection },
+      });
+
+      if (response.status === 'success' && response.data) {
+        setScore((response.data.upvotes ?? 0) - (response.data.downvotes ?? 0));
+        setUserVote(response.data.user_vote);
+        if (onVoteChange) {
+            onVoteChange(post.id, response.data);
+        }
+      } else {
+        throw new Error((response as any).message || "Failed to record vote.");
+      }
+    } catch (error: any) {
+      toast({ title: "Error Voting", description: error.message || "Could not submit vote.", variant: "destructive" });
+      setUserVote(originalUserVote); // Revert
+      setScore(originalScore); // Revert
+    } finally {
+      setIsVoting(false);
+    }
+  };
+
+  const formatTimeAgo = (isoDate: string) => {
+    if (!isoDate) return '';
+    const date = new Date(isoDate);
+    const now = new Date();
+    const diffInSeconds = Math.floor((now.getTime() - date.getTime()) / 1000);
+    if (diffInSeconds < 5) return 'Just now';
+    if (diffInSeconds < 60) return `${diffInSeconds}s ago`;
+    const diffInMinutes = Math.floor(diffInSeconds / 60);
+    if (diffInMinutes < 60) return `${diffInMinutes}m ago`;
+    const diffInHours = Math.floor(diffInMinutes / 60);
+    if (diffInHours < 24) return `${diffInHours}h ago`;
+    const diffInDays = Math.floor(diffInHours / 24);
+    return `${diffInDays}d ago`;
+  };
+  
+  const displayedContent = post.content_text || post.contentPreview || "";
+
+  return (
+    <Card
+      className="animate-slide-up cursor-pointer hover:shadow-lg transition-all dark:bg-gray-800"
+      style={{ animationDelay: `${index * 0.05}s` }}
+      onClick={onClick}
+    >
+      <CardContent className="p-4">
+        {showCommunity && post.community && (
+          <div className="mb-2 flex items-center space-x-1.5">
+            {post.community.icon && <span className="text-sm">{post.community.icon}</span>}
+            <button
+                className="text-xs font-medium text-gray-600 dark:text-gray-400 hover:underline focus:outline-none"
+                onClick={(e) => { e.stopPropagation(); navigate(`/communities/${post.community?.slug || post.community?.id}`);}}
+            >
+                {post.community.name}
+            </button>
+            <span className="text-xs text-gray-400 dark:text-gray-500">•</span>
+            <span className="text-xs text-gray-500 dark:text-gray-400">Posted by u/{post.author.name}</span>
+            <span className="text-xs text-gray-400 dark:text-gray-500">•</span>
+            <span className="text-xs text-gray-500 dark:text-gray-400">{formatTimeAgo(post.createdAt)}</span>
+          </div>
+        )}
+
+        {!showCommunity && (
+            <div className="flex items-center space-x-3 mb-2">
+            <Avatar className="h-6 w-6">
+                <AvatarImage src={post.author.avatarUrl} alt={post.author.name}/>
+                <AvatarFallback>{post.author.name?.split(' ').map(n => n[0]).join('').toUpperCase() || 'U'}</AvatarFallback>
+            </Avatar>
+            <div>
+                <p className="text-xs font-medium text-gray-700 dark:text-gray-300">u/{post.author.name}</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">{formatTimeAgo(post.createdAt)}</p>
+            </div>
+            </div>
+        )}
+
+
+        <h3 className="font-semibold text-lg text-gray-900 dark:text-white mb-1 hover:text-unicampus-red">{post.title}</h3>
+        
+        {post.content_type === 'text' && displayedContent && (
+          <p className="text-sm text-gray-700 dark:text-gray-300 line-clamp-4 mb-3">
+            {displayedContent}
+          </p>
+        )}
+
+        {post.content_type === 'image' && post.image_url && (
+          <div className="my-3 rounded-lg overflow-hidden max-h-96 flex justify-center bg-gray-100 dark:bg-gray-700">
+            <img src={post.image_url} alt="Post image" className="max-h-96 object-contain" />
+          </div>
+        )}
+
+        {post.content_type === 'link' && post.link_url && (
+            <a
+                href={post.link_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                className="my-3 p-3 border dark:border-gray-700 rounded-md flex items-center space-x-2 text-sm text-blue-600 dark:text-blue-400 hover:bg-gray-50 dark:hover:bg-gray-700"
+            >
+                <ExternalLink className="h-4 w-4 flex-shrink-0" />
+                <span className="truncate flex-grow">{post.link_url}</span>
+            </a>
+        )}
+        {post.tags && post.tags.length > 0 && (
+             <div className="mb-3 flex flex-wrap gap-1">
+                {post.tags.map(tag => (
+                    <Badge key={tag} variant="secondary" className="text-xs">{tag}</Badge>
+                ))}
+            </div>
+        )}
+
+        <div className="flex items-center justify-start space-x-4">
+            <div className="flex items-center space-x-0.5">
+            <Button
+                variant="ghost" size="sm"
+                className={`p-1 h-8 w-8 rounded-full ${userVote === 'up' ? 'text-unicampus-red bg-unicampus-red/10' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700'}`}
+                onClick={(e) => handleVote('up', e)} // Simplified: always try 'up'
+                disabled={isVoting}
+            > <ChevronUp className="h-5 w-5" /> </Button>
+            <span className="text-sm font-medium text-gray-700 dark:text-gray-300 min-w-[2.5rem] text-center tabular-nums">{score}</span>
+            <Button
+                variant="ghost" size="sm"
+                className={`p-1 h-8 w-8 rounded-full ${userVote === 'down' ? 'text-blue-600 bg-blue-600/10' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700'}`}
+                onClick={(e) => handleVote('down', e)} // Simplified: always try 'down'
+                disabled={isVoting}
+            > <ChevronDown className="h-5 w-5" /> </Button>
+            </div>
+          
+          <Button variant="ghost" size="sm" className="flex items-center space-x-1.5 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300" onClick={onClick}>
+            <MessageSquare className="h-4 w-4" />
+            <span className="text-sm">{post.commentCount}</span>
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+};
+
+export default PostListItem;
+--- END OF FILE: src/components/communities/PostListItem.tsx ---
+
+--------------------------------------------------------------
+
+--- START OF FILE: src/components/posts/PostDetailScreen.tsx ---
+// src/components/posts/PostDetailScreen.tsx
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useParams, useNavigate, Link as RouterLink } from 'react-router-dom';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '@/components/ui/card';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Badge } from '@/components/ui/badge';
+import { Textarea } from '@/components/ui/textarea';
+import { ChevronLeft, Loader2, MessageSquare, ChevronUp, ChevronDown, ExternalLink, Send, ThumbsUp, ThumbsDown, CornerDownRight, UserCircle } from 'lucide-react';
+import { useAuth } from '@/contexts/AuthContext';
+import apiClient, { PaginatedResponse } from '@/lib/apiClient';
+import { toast } from '@/hooks/use-toast';
+import { Post, Comment, Author as PostAuthor, PostDetailApiResponse, CreateCommentApiResponse, VoteApiResponse, CommunitySummary } from '@/types/community';
+import BottomNavigation from '@/components/layout/BottomNavigation'; // Optional
+
+// --- Helper Normalization Functions (Consider moving to a shared util file) ---
+const normalizePostData = (apiPost: any): Post => {
+    const id = apiPost.id || apiPost._id;
+    if (!id) {
+        console.error("Post Detail Norm Error: Post data missing ID", apiPost);
+        return { ...apiPost, id: `fallback-post-${Math.random()}`, title: "Error: Post data incomplete" } as Post;
+    }
+    return {
+        id: id, _id: apiPost._id || id,
+        title: apiPost.title || "Untitled Post",
+        contentType: apiPost.content_type || apiPost.contentType || 'text',
+        contentText: apiPost.content_text || apiPost.contentText || apiPost.contentPreview,
+        contentPreview: apiPost.contentPreview || apiPost.content_text || apiPost.contentText,
+        imageUrl: apiPost.image_url || apiPost.imageUrl,
+        linkUrl: apiPost.link_url || apiPost.linkUrl,
+        tags: apiPost.tags || [],
+        author: apiPost.author || { id: 'unknown', name: 'Unknown Author', avatarUrl: undefined },
+        communityId: apiPost.communityId || apiPost.community?.id,
+        communityName: apiPost.communityName || apiPost.community?.name,
+        communitySlug: apiPost.communitySlug || apiPost.community?.slug,
+        communityIcon: apiPost.communityIcon || apiPost.community?.icon,
+        community: apiPost.community,
+        createdAt: apiPost.created_at || apiPost.createdAt || new Date().toISOString(),
+        updatedAt: apiPost.updated_at || apiPost.updatedAt,
+        lastActivityAt: apiPost.last_activity_at || apiPost.lastActivityAt,
+        upvotes: apiPost.upvotes ?? 0,
+        downvotes: apiPost.downvotes ?? 0,
+        commentCount: apiPost.comment_count ?? apiPost.commentCount ?? 0,
+        userVote: apiPost.user_vote || apiPost.userVote || null,
+    };
+};
+
+const normalizeCommentData = (apiComment: any): Comment => {
+    const id = apiComment.id || apiComment._id;
+    if (!id) {
+        console.error("Comment Norm Error: Comment data missing ID", apiComment);
+        return { ...apiComment, id: `fallback-comment-${Math.random()}`, text: "Error: Comment data incomplete" } as Comment;
+    }
+    return {
+        id: id, _id: apiComment._id || id,
+        postId: apiComment.postId || apiComment.post_id,
+        author: apiComment.author || { id: 'unknown', name: 'Unknown Author', avatarUrl: undefined },
+        text: apiComment.text || "",
+        parentId: apiComment.parentId || apiComment.parent_id,
+        replyCount: apiComment.replyCount ?? apiComment.reply_count ?? 0,
+        upvotes: apiComment.upvotes ?? 0,
+        downvotes: apiComment.downvotes ?? 0,
+        createdAt: apiComment.created_at || apiComment.createdAt || new Date().toISOString(),
+        updatedAt: apiComment.updated_at || apiComment.updatedAt,
+        userVote: apiComment.user_vote || apiComment.userVote || null,
+    };
+};
+
+const formatTimeAgo = (isoDate?: string) => {
+    if (!isoDate) return 'some time ago';
+    const date = new Date(isoDate);
+    const now = new Date();
+    const diffInSeconds = Math.floor((now.getTime() - date.getTime()) / 1000);
+    if (diffInSeconds < 5) return 'Just now';
+    if (diffInSeconds < 60) return `${diffInSeconds}s ago`;
+    const diffInMinutes = Math.floor(diffInSeconds / 60);
+    if (diffInMinutes < 60) return `${diffInMinutes}m ago`;
+    const diffInHours = Math.floor(diffInMinutes / 60);
+    if (diffInHours < 24) return `${diffInHours}h ago`;
+    const diffInDays = Math.floor(diffInHours / 24);
+    return `${diffInDays}d ago`;
+};
+
+// --- CommentListItem Component (can be moved to its own file) ---
+interface CommentListItemProps {
+    comment: Comment;
+    onReply: (commentId: string, authorName: string) => void; // Callback to set reply target
+    // onVote: (commentId: string, direction: 'up' | 'down' | 'none') => Promise<void>; // For comment voting
+}
+const CommentListItem: React.FC<CommentListItemProps> = ({ comment, onReply }) => (
+    <div className="flex space-x-3 py-3 border-b dark:border-gray-700 last:border-b-0">
+        <Avatar className="h-8 w-8">
+            <AvatarImage src={comment.author.avatarUrl} alt={comment.author.name} />
+            <AvatarFallback>{comment.author.name?.charAt(0).toUpperCase() || 'U'}</AvatarFallback>
+        </Avatar>
+        <div className="flex-1">
+            <div className="flex items-center space-x-2 text-xs mb-0.5">
+                <span className="font-semibold text-gray-800 dark:text-gray-200">{comment.author.name}</span>
+                <span className="text-gray-500 dark:text-gray-400">• {formatTimeAgo(comment.createdAt)}</span>
+            </div>
+            <p className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap">{comment.text}</p>
+            <div className="flex items-center space-x-3 mt-1.5 text-xs">
+                <Button variant="ghost" size="xs" className="p-1 h-auto text-gray-500 dark:text-gray-400 hover:text-unicampus-red" 
+                        onClick={() => onReply(comment.id, comment.author.name)}>
+                    <CornerDownRight className="h-3 w-3 mr-1" /> Reply ({comment.replyCount ?? 0})
+                </Button>
+                {/* Add vote buttons for comments here later */}
+            </div>
+        </div>
+    </div>
+);
+
+
+// --- PostDetailScreen Component ---
+const PostDetailScreen = () => {
+  const { postId } = useParams<{ postId: string }>();
+  const navigate = useNavigate();
+  const { user, isAuthenticated, isLoading: authIsLoading } = useAuth();
+
+  const [post, setPost] = useState<Post | null>(null);
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [isLoadingPost, setIsLoadingPost] = useState(true);
+  const [isLoadingComments, setIsLoadingComments] = useState(true);
+  const [isVotingPost, setIsVotingPost] = useState(false);
+  
+  const [newCommentText, setNewCommentText] = useState("");
+  const [isSubmittingComment, setIsSubmittingComment] = useState(false);
+  const [replyingTo, setReplyingTo] = useState<{ commentId: string; authorName: string } | null>(null);
+  const commentInputRef = useRef<HTMLTextAreaElement>(null);
+
+
+  const [currentCommentsPage, setCurrentCommentsPage] = useState(1);
+  const [totalCommentsPages, setTotalCommentsPages] = useState(1);
+  // Add sortBy for comments if your API supports it
+  // const [sortCommentsBy, setSortCommentsBy] = useState<'newest' | 'oldest' | 'top'>('newest');
+
+
+  const fetchPostDetail = useCallback(async () => {
+    if (!postId) { navigate(-1); return; }
+    setIsLoadingPost(true);
+    try {
+      const response = await apiClient<PostDetailApiResponse>(`/posts/${postId}`);
+      if (response.status === 'success' && response.data?.post) {
+        setPost(normalizePostData(response.data.post));
+      } else {
+        toast({ title: "Error", description: (response as any).message || "Post not found.", variant: "destructive" });
+        navigate(-1);
+      }
+    } catch (error: any) {
+      toast({ title: "Error", description: error.message || "Failed to load post.", variant: "destructive" });
+      navigate(-1);
+    } finally {
+      setIsLoadingPost(false);
+    }
+  }, [postId, navigate]);
+
+  const fetchComments = useCallback(async (page = 1) => {
+    if (!postId) return;
+    if (page === 1) setIsLoadingComments(true);
+    const params = new URLSearchParams({ page: page.toString(), limit: '10', sortBy: 'newest' }); // Default sort
+    try {
+      const response = await apiClient<PaginatedResponse<any>>(`/posts/${postId}/comments?${params.toString()}`);
+      if (response.status === 'success' && Array.isArray(response.data)) {
+        const normalized = response.data.map(normalizeCommentData);
+        setComments(prev => page === 1 ? normalized : [...prev, ...normalized]);
+        const itemsPerPage = 10;
+        setTotalCommentsPages(response.results ? Math.ceil(response.results / itemsPerPage) : page + (response.data.length < itemsPerPage ? 0 : 1));
+        setCurrentCommentsPage(page);
+      } else if (page === 1) setComments([]);
+    } catch (error: any) { if (page === 1) setComments([]); } 
+    finally { if (page === 1) setIsLoadingComments(false); }
+  }, [postId]);
+
+  useEffect(() => {
+    if (!authIsLoading) { fetchPostDetail(); fetchComments(1); }
+  }, [postId, authIsLoading, fetchPostDetail, fetchComments]);
+
+  const handlePostVote = async (voteDirectionAttempt: 'up' | 'down') => {
+    if (!isAuthenticated || !post) { toast({ title: "Login Required", description: "Please log in to vote.", variant: "destructive" }); return; }
+    if (isVotingPost) return;
+    setIsVotingPost(true);
+    const originalUserVote = post.userVote, originalUpvotes = post.upvotes, originalDownvotes = post.downvotes;
+    let newApiDirection: 'up' | 'down' | 'none' = post.userVote === voteDirectionAttempt ? 'none' : voteDirectionAttempt;
+    
+    const tempPost = { ...post }; // Optimistic update
+    if (newApiDirection === 'none') { if (originalUserVote === 'up') tempPost.upvotes--; else if (originalUserVote === 'down') tempPost.downvotes--; tempPost.userVote = null; }
+    else { if (originalUserVote === 'up') tempPost.upvotes--; else if (originalUserVote === 'down') tempPost.downvotes--;
+           if (newApiDirection === 'up') tempPost.upvotes++; else tempPost.downvotes++; tempPost.userVote = newApiDirection; }
+    setPost(tempPost);
+
+    try {
+        const response = await apiClient<VoteApiResponse>(`/posts/${post.id}/vote`, { method: 'POST', data: { direction: newApiDirection } });
+        if (response.status === 'success' && response.data) {
+            setPost(p => p ? { ...p, upvotes: response.data.upvotes, downvotes: response.data.downvotes, userVote: response.data.user_vote } : null);
+        } else throw new Error((response as any).message || "Vote failed.");
+    } catch (error: any) {
+        toast({ title: "Vote Error", description: error.message, variant: "destructive" });
+        setPost(p => p ? {...p, userVote: originalUserVote, upvotes: originalUpvotes, downvotes: originalDownvotes } : null);
+    } finally { setIsVotingPost(false); }
+  };
+
+  const handleCommentSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newCommentText.trim() || !postId || !isAuthenticated) {
+        toast({ title: "Cannot Comment", description: !isAuthenticated ? "Please log in." : "Comment cannot be empty.", variant: "destructive"});
+        if (!isAuthenticated) navigate('/login/student');
+        return;
+    }
+    setIsSubmittingComment(true);
+    try {
+        const payload: { text: string; parent_comment_id?: string } = { text: newCommentText.trim() };
+        if (replyingTo) payload.parent_comment_id = replyingTo.commentId;
+
+        const response = await apiClient<CreateCommentApiResponse>(`/posts/${postId}/comments`, {
+            method: 'POST', data: payload,
+        });
+        if (response.status === 'success' && response.data?.comment) {
+            const newComment = normalizeCommentData(response.data.comment);
+            if (replyingTo) { // If it's a reply, we might need to update parent comment's replyCount or re-fetch replies for that parent
+                setComments(prev => prev.map(c => c.id === replyingTo?.commentId ? {...c, replyCount: (c.replyCount || 0) + 1} : c));
+                // Ideally, re-fetch replies for the parent comment if displaying them nested.
+                // For now, just add to main list if not too deep or handle via state update of parent.
+                // This simple add might not place it correctly in a threaded view.
+                 setComments(prev => [...prev, newComment].sort((a,b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() ));
+
+            } else { // Top-level comment
+                setComments(prev => [newComment, ...prev]); // Add to top
+            }
+            setPost(p => p ? {...p, commentCount: (p.commentCount || 0) + 1} : null); // Update post's comment count
+            setNewCommentText("");
+            setReplyingTo(null);
+            toast({ title: "Comment Posted!" });
+        } else throw new Error((response as any).message || "Failed to post comment.");
+    } catch (error: any) {
+        toast({ title: "Comment Error", description: error.message, variant: "destructive"});
+    } finally {
+        setIsSubmittingComment(false);
+    }
+  };
+
+  const handleSetReplyTo = (commentId: string, authorName: string) => {
+    setReplyingTo({ commentId, authorName });
+    commentInputRef.current?.focus(); // Focus the textarea
+  };
+
+
+  if (authIsLoading || isLoadingPost) {
+    return <div className="flex items-center justify-center min-h-screen"><Loader2 className="h-8 w-8 animate-spin text-unicampus-red" /> Loading Post...</div>;
+  }
+  if (!post) return <div className="flex items-center justify-center min-h-screen p-4 text-center">Post not found.</div>;
+
+  const score = (post.upvotes ?? 0) - (post.downvotes ?? 0);
+
+  return (
+    <div className="min-h-screen bg-gray-100 dark:bg-gray-950 pb-16"> {/* Adjusted pb for BottomNav */}
+      <div className="bg-white dark:bg-gray-900 shadow-sm px-2 py-3 sticky top-0 z-30">
+        <div className="max-w-3xl mx-auto flex items-center space-x-2">
+          <Button variant="ghost" size="icon" onClick={() => navigate(-1)} title="Go Back">
+            <ChevronLeft className="h-6 w-6" />
+          </Button>
+          <h1 className="text-lg font-semibold text-gray-900 dark:text-white truncate">{post.title}</h1>
+        </div>
+      </div>
+
+      <div className="max-w-3xl mx-auto p-0 sm:p-4">
+        <Card className="dark:bg-gray-800 dark:border-gray-700 shadow-none sm:shadow-md sm:rounded-lg">
+          <CardHeader className="p-4 md:p-6 border-b dark:border-gray-700">
+            {post.community && (
+              <div className="mb-2 flex items-center space-x-1.5">
+                {post.community.icon && <span className="text-base">{post.community.icon}</span>}
+                <RouterLink to={`/communities/${post.community.slug || post.community.id}`} className="text-xs font-semibold text-gray-700 dark:text-gray-300 hover:underline">
+                  c/{post.community.name}
+                </RouterLink>
+                <span className="text-xs text-gray-400 dark:text-gray-500">•</span>
+                <span className="text-xs text-gray-500 dark:text-gray-400">Posted by u/{post.author.name}</span>
+                <span className="text-xs text-gray-400 dark:text-gray-500">•</span>
+                <span className="text-xs text-gray-500 dark:text-gray-400">{formatTimeAgo(post.createdAt)}</span>
+              </div>
+            )}
+            <CardTitle className="text-xl md:text-2xl font-bold text-gray-900 dark:text-white">{post.title}</CardTitle>
+            {post.tags && post.tags.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                    {post.tags.map(tag => <Badge key={tag} variant="secondary" className="text-xs">{tag}</Badge>)}
+                </div>
+            )}
+          </CardHeader>
+          <CardContent className="p-4 md:p-6 text-sm text-gray-800 dark:text-gray-200 leading-relaxed">
+            {post.contentType === 'text' && post.contentText && <div className="whitespace-pre-wrap">{post.contentText}</div>}
+            {post.contentType === 'image' && post.imageUrl && (
+              <img src={post.imageUrl} alt={post.title} className="rounded-md max-h-[70vh] w-auto mx-auto my-2" />
+            )}
+            {post.contentType === 'link' && post.linkUrl && (
+              <a href={post.linkUrl} target="_blank" rel="noopener noreferrer" className="flex items-center space-x-2 text-blue-600 dark:text-blue-400 hover:underline break-all">
+                <ExternalLink className="h-4 w-4 flex-shrink-0" /> <span>{post.linkUrl}</span>
+              </a>
+            )}
+          </CardContent>
+          <CardFooter className="p-4 md:p-6 border-t dark:border-gray-700 flex items-center justify-start space-x-4">
+            <div className="flex items-center space-x-0.5">
+                <Button variant="ghost" size="sm" className={`p-1 h-8 w-8 rounded-full ${post.userVote === 'up' ? 'text-unicampus-red bg-unicampus-red/10' : 'text-gray-500 hover:bg-gray-200 dark:text-gray-400 dark:hover:bg-gray-700'}`} onClick={() => handlePostVote('up')} disabled={isVotingPost}><ChevronUp className="h-5 w-5" /></Button>
+                <span className="text-sm font-bold text-gray-700 dark:text-gray-300 min-w-[2.5rem] text-center tabular-nums">{score}</span>
+                <Button variant="ghost" size="sm" className={`p-1 h-8 w-8 rounded-full ${post.userVote === 'down' ? 'text-blue-600 bg-blue-600/10' : 'text-gray-500 hover:bg-gray-200 dark:text-gray-400 dark:hover:bg-gray-700'}`} onClick={() => handlePostVote('down')} disabled={isVotingPost}><ChevronDown className="h-5 w-5" /></Button>
+            </div>
+            <div className="flex items-center space-x-1.5 text-gray-500 dark:text-gray-400">
+                <MessageSquare className="h-4 w-4" />
+                <span className="text-sm">{post.commentCount} Comments</span>
+            </div>
+          </CardFooter>
+        </Card>
+
+        {/* Comments Section */}
+        <Card className="mt-4 dark:bg-gray-800 dark:border-gray-700 shadow-none sm:shadow-md sm:rounded-lg">
+          <CardHeader className="p-4 md:p-6">
+            <CardTitle className="text-lg font-semibold text-gray-800 dark:text-gray-200">
+                {post.commentCount} {post.commentCount === 1 ? 'Comment' : 'Comments'}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-4 md:p-6 pt-0">
+            {/* Comment Form */}
+            {isAuthenticated && (
+                <form onSubmit={handleCommentSubmit} className="mb-6">
+                    {replyingTo && (
+                        <div className="text-xs text-gray-600 dark:text-gray-400 mb-1 flex justify-between">
+                            <span>Replying to {replyingTo.authorName}</span>
+                            <Button variant="link" size="xs" className="p-0 h-auto text-unicampus-red" onClick={() => setReplyingTo(null)}>Cancel Reply</Button>
+                        </div>
+                    )}
+                    <Textarea
+                        ref={commentInputRef}
+                        value={newCommentText}
+                        onChange={(e) => setNewCommentText(e.target.value)}
+                        placeholder={replyingTo ? `Reply to ${replyingTo.authorName}...` : "Add a comment..."}
+                        rows={3}
+                        className="w-full mb-2 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                    />
+                    <div className="flex justify-end">
+                        <Button type="submit" size="sm" className="bg-unicampus-red hover:bg-unicampus-red-dark text-white" disabled={isSubmittingComment || !newCommentText.trim()}>
+                        {isSubmittingComment ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Send className="h-4 w-4 mr-2" />}
+                        {replyingTo ? "Post Reply" : "Post Comment"}
+                        </Button>
+                    </div>
+                </form>
+            )}
+
+            {/* Comments List */}
+            {isLoadingComments && comments.length === 0 ? (
+              <div className="text-center py-6 text-gray-500 dark:text-gray-400">Loading comments...</div>
+            ) : comments.length > 0 ? (
+              <div className="space-y-3">
+                {comments.map(comment => (
+                  <CommentListItem key={comment.id} comment={comment} onReply={handleSetReplyTo} />
+                ))}
+                {!isLoadingComments && currentCommentsPage < totalCommentsPages && (
+                    <div className="text-center mt-4">
+                        <Button variant="outline" onClick={() => fetchComments(currentCommentsPage + 1)} disabled={isLoadingComments}>Load More Comments</Button>
+                    </div>
+                )}
+              </div>
+            ) : (
+              <p className="text-center text-gray-500 dark:text-gray-400 py-6">No comments yet. Be the first to comment!</p>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+      {/* <BottomNavigation /> */} {/* Optional: Decide if BottomNav is needed here */}
+    </div>
+  );
+};
+
+export default PostDetailScreen;
+--- END OF FILE: src/components/posts/PostDetailScreen.tsx ---
+
+--------------------------------------------------------------
+
+--- START OF CORE FILE: src/contexts/AuthContext.tsx ---
+// src/contexts/AuthContext.tsx
+import React, { createContext, useContext, useState, ReactNode, useEffect } from 'react';
+import apiClient from '../lib/apiClient'; // Import the API client
+
+// Updated User interface based on your /auth/login/student response
+interface User {
+  id: string;         // User's MongoDB ObjectId
+  usn: string;
+  name: string;
+  email: string;       // e.g., usn@unicampus.app
+  role: 'student' | 'admin'; // Assuming admin role also exists
+  collegeProfile?: {
+    officialName?: string;
+    department?: string;
+    semester?: number;
+    section?: string;
+    usn?: string; // Can be redundant but might be from a different source
+    // Add other fields as per your API
+  };
+  mostRecentCGPA?: number | null;
+  avatar?: string | null;
+  // Add fields from /users/me if different/more comprehensive
+  academicSummaries?: Array<{ code: string; name: string; cieTotal: number | null; attendancePercentage: number | null }>;
+  examHistory?: Array<{ semesterName: string; creditsRegistered: number; creditsEarned: number; sgpa: number | null; cgpa: number | null }>;
+  collegeDataLastUpdated?: string; // ISO datetime
+  createdAt?: string; // ISO datetime
+  updatedAt?: string; // ISO datetime
+}
+
+// API Response structure for login
+interface LoginApiResponse {
+  status: string;
+  accessToken: string;
+  refreshToken: string;
+  data: {
+    user: User;
+  };
+}
+
+// API Response structure for /users/me
+interface UserProfileApiResponse {
+    status: string;
+    data: {
+        user: User;
+    };
+}
+
+// API Response for token refresh
+interface RefreshTokenApiResponse {
+    status: string;
+    accessToken: string;
+}
+
+
+interface AuthContextType {
+  user: User | null;
+  accessToken: string | null; // Store accessToken
+  isLoading: boolean; // For initial load and login/logout processes
+  isAuthenticated: boolean;
+  login: (usn: string, dob_dd: string, dob_mm: string, dob_yyyy: string) => Promise<void>; // Update params
+  logout: () => Promise<void>;
+  fetchUserProfile: () => Promise<void>; // To load user on app start or refresh
+}
+
+const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  const [user, setUser] = useState<User | null>(null);
+  const [accessToken, setAccessToken] = useState<string | null>(localStorage.getItem('accessToken'));
+  const [refreshToken, setRefreshToken] = useState<string | null>(localStorage.getItem('refreshToken'));
+  const [isLoading, setIsLoading] = useState(true); // True initially to load user
+
+  const isAuthenticated = !!accessToken && !!user; // User must also be loaded
+
+  useEffect(() => {
+    const loadUserFromToken = async () => {
+      if (accessToken) {
+        try {
+          await fetchUserProfile(); // Try to fetch user profile if token exists
+        } catch (error: any) {
+          console.error("Failed to load user with existing token:", error);
+          if (error.httpStatus === 401) { // If token is invalid/expired
+            await attemptRefreshTokenAndRetry(fetchUserProfile);
+          } else {
+            // For other errors, or if refresh fails, clear auth data
+            clearAuthData();
+          }
+        }
+      }
+      setIsLoading(false);
+    };
+    loadUserFromToken();
+  }, []); // Empty dependency array: run once on mount
+
+  const storeAuthData = (accessTok: string, refreshTok: string, userData?: User) => {
+    localStorage.setItem('accessToken', accessTok);
+    localStorage.setItem('refreshToken', refreshTok);
+    setAccessToken(accessTok);
+    setRefreshToken(refreshTok);
+    if (userData) {
+        setUser(userData);
+    }
+  };
+
+  const clearAuthData = () => {
+    localStorage.removeItem('accessToken');
+    localStorage.removeItem('refreshToken');
+    setAccessToken(null);
+    setRefreshToken(null);
+    setUser(null);
+  };
+
+  const login = async (usn: string, dob_dd: string, dob_mm: string, dob_yyyy: string): Promise<void> => {
+    setIsLoading(true);
+    try {
+      const response = await apiClient<LoginApiResponse>('/auth/login/student', {
+        method: 'POST',
+        data: { usn, dob_dd, dob_mm, dob_yyyy }, // Match your API request body
+        isPublic: true, // Login doesn't require a token
+      });
+
+      if (response.status === 'success' && response.accessToken && response.refreshToken && response.data.user) {
+        storeAuthData(response.accessToken, response.refreshToken, response.data.user);
+      } else {
+        // If API returns success but missing data, treat as error
+        throw new Error(response.status || 'Login failed: Invalid response from server.');
+      }
+    } catch (error: any) {
+      clearAuthData(); // Ensure tokens are cleared on login failure
+      console.error("Login error:", error);
+      throw error; // Re-throw to be caught by LoginScreen
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const logout = async () => {
+    setIsLoading(true);
+    // Call backend logout if it exists and does something meaningful (e.g., invalidates refresh token)
+    try {
+        if (accessToken) { // Only call if there's a token to invalidate
+            await apiClient('/auth/logout', { method: 'POST' });
+        }
+    } catch (error) {
+        console.warn("Backend logout call failed or not critical, clearing client-side tokens:", error);
+    } finally {
+        clearAuthData();
+        setIsLoading(false);
+        // Optionally navigate to login or home page after logout
+        // navigate('/login'); // if using react-router
+    }
+  };
+
+  const fetchUserProfile = async (): Promise<void> => {
+    if (!localStorage.getItem('accessToken')) { // Use localStorage directly here as state might not be updated yet
+      // setIsLoading(false); // Ensure loading state is managed
+      return; // No token, no user to fetch
+    }
+    // setIsLoading(true); // Set loading true when fetching
+    try {
+      const response = await apiClient<UserProfileApiResponse>('/users/me', { method: 'GET' });
+      if (response.status === 'success' && response.data.user) {
+        setUser(response.data.user);
+      } else {
+        throw new Error('Failed to fetch user profile: Invalid response.');
+      }
+    } catch (error: any) {
+      console.error("Fetch user profile error:", error);
+      if (error.httpStatus === 401) { // Token might be expired
+        // Attempt to refresh token, then retry fetching profile
+        await attemptRefreshTokenAndRetry(fetchUserProfile);
+      } else {
+        // For other errors, or if refresh fails, clear auth data
+        clearAuthData();
+      }
+      throw error; // Re-throw for components or initial load to handle
+    }
+    // finally { setIsLoading(false); } // Manage loading state appropriately
+  };
+
+  const attemptRefreshTokenAndRetry = async (retryCallback: () => Promise<void>) => {
+    const currentRefreshToken = localStorage.getItem('refreshToken');
+    if (!currentRefreshToken) {
+      console.log("No refresh token available. Logging out.");
+      clearAuthData();
+      return;
+    }
+
+    try {
+      console.log("Attempting to refresh token...");
+      const refreshResponse = await apiClient<RefreshTokenApiResponse>('/auth/refresh-token', {
+        method: 'POST',
+        isRefreshTokenRequest: true, // Use refresh token for Authorization header
+        isPublic: false, // Although it uses a token, it's a specific auth flow
+      });
+
+      if (refreshResponse.status === 'success' && refreshResponse.accessToken) {
+        console.log("Token refreshed successfully.");
+        // Store only the new access token. Refresh token might also be rotated by backend.
+        // For simplicity, we assume refresh token remains valid or backend doesn't rotate it often.
+        // If backend sends new refresh token, update it here.
+        storeAuthData(refreshResponse.accessToken, currentRefreshToken); // Re-use old refresh token for now
+        await retryCallback(); // Retry the original failed request (e.g., fetchUserProfile)
+      } else {
+        console.error("Token refresh failed with success status but no new token.");
+        clearAuthData(); // If refresh fails, logout
+      }
+    } catch (refreshError) {
+      console.error("Token refresh API call failed:", refreshError);
+      clearAuthData(); // If refresh fails, logout
+    }
+  };
+
+
+  return (
+    <AuthContext.Provider value={{
+      user,
+      accessToken, // Expose accessToken if needed by other parts of app directly (though apiClient handles it)
+      isLoading,
+      login,
+      logout,
+      isAuthenticated,
+      fetchUserProfile
+    }}>
+      {children}
+    </AuthContext.Provider>
+  );
+};
+
+export const useAuth = () => {
+  const context = useContext(AuthContext);
+  if (!context) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+  return context;
+};
+--- END OF CORE FILE: src/contexts/AuthContext.tsx ---
+
+--------------------------------------------------------------
+
+--- START OF CORE FILE: src/lib/apiClient.ts ---
+// src/lib/apiClient.ts
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001/api/v1';
+
+// Helper to get token from localStorage (AuthContext will manage this)
+const getAuthToken = (): string | null => {
+  return localStorage.getItem('accessToken');
+};
+
+interface ApiClientOptions extends RequestInit {
+  data?: any;
+  isPublic?: boolean; // To bypass auth header for public routes
+  isRefreshTokenRequest?: boolean; // Special flag for refresh token request
+}
+
+// Define a generic error structure your API might return
+interface ApiError {
+  status: string; // "fail" or "error"
+  message: string;
+  // Add other potential error fields
+}
+
+export interface PaginatedResponse<T> {
+  status: string;
+  results?: number; // If your API returns total results
+  data: T[]; // Assuming data is always an array for paginated lists
+  // Add other pagination fields if your API returns them (e.g., totalPages, currentPage)
+}
+
+
+async function apiClient<T>(
+  endpoint: string,
+  { data, headers: customHeaders, isPublic = false, isRefreshTokenRequest = false, ...customConfig }: ApiClientOptions = {}
+): Promise<T> {
+  const config: RequestInit = {
+    method: data ? 'POST' : 'GET', // Default to POST if data is provided
+    ...customConfig,
+    headers: {
+      ...(data && !(data instanceof FormData) && { 'Content-Type': 'application/json' }), // Don't set for FormData
+      ...customHeaders,
+    },
+  };
+
+  if (!isPublic) {
+    const token = isRefreshTokenRequest ? localStorage.getItem('refreshToken') : getAuthToken();
+    if (token) {
+      config.headers = {
+        ...config.headers,
+        Authorization: `Bearer ${token}`,
+      };
+    } else if (endpoint !== '/auth/login/student' && !endpoint.startsWith('/app/info')) {
+      // For non-public routes (excluding login and app info), if no token, it's an issue.
+      // AuthContext will handle redirect or state change.
+      console.warn(`No auth token found for protected route: ${endpoint}`);
+      // Throw an error or let AuthContext handle this by checking isAuthenticated
+      return Promise.reject({ status: 401, message: 'Authentication token is missing.' });
+    }
+  }
+
+  if (data) {
+    if (data instanceof FormData) {
+      config.body = data; // FormData handles its own content type
+    } else {
+      config.body = JSON.stringify(data);
+    }
+  }
+
+  const response = await fetch(`${API_BASE_URL}${endpoint}`, config);
+
+  if (!response.ok) {
+    // Attempt to parse error JSON, otherwise use statusText
+    let errorData: ApiError | { message: string };
+    try {
+      errorData = await response.json();
+      if (typeof errorData !== 'object' || !('message' in errorData)) {
+        // If the parsed JSON doesn't have a message, create one
+        errorData = { message: response.statusText || 'Unknown error occurred' };
+      }
+    } catch (e) {
+      errorData = { message: response.statusText || 'Failed to parse error response.' };
+    }
+    // Add status code to the rejected error object
+    return Promise.reject({ httpStatus: response.status, ...errorData });
+  }
+
+  if (response.status === 204 || response.headers.get('Content-Length') === '0') {
+    // For 204 No Content or empty responses, resolve with a success indicator or undefined.
+    // Depending on T, you might want to cast or return a specific success object.
+    return { status: 'success', message: 'Operation successful' } as unknown as T;
+  }
+
+  return response.json() as Promise<T>;
+}
+
+export default apiClient;
+--- END OF CORE FILE: src/lib/apiClient.ts ---
+
+--------------------------------------------------------------
+
+--- START OF CORE FILE: src/App.tsx ---
+// src/App.tsx
+import React from 'react';
+import { Toaster } from "@/components/ui/toaster";
+import { Toaster as Sonner } from "@/components/ui/sonner";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { Routes, Route, Navigate } from "react-router-dom";
+import { ThemeProvider } from "@/contexts/ThemeContext";
+import { useAuth } from "@/contexts/AuthContext";
+import Index from "./pages/Index";
+import NotFound from "./pages/NotFound";
+import LoginScreen from "@/components/auth/LoginScreen";
+import Dashboard from "@/components/dashboard/Dashboard";
+import ResultsScreen from "@/components/results/ResultsScreen";
+import CommunitiesScreen from "@/components/communities/CommunitiesScreen";
+import CommunityDetailScreen from "@/components/communities/CommunityDetailScreen";
+import AttendanceScreen from "@/components/attendance/AttendanceScreen";
+import ResourcesScreen from "@/components/resources/ResourcesScreen";
+import SettingsScreen from "@/components/settings/SettingsScreen";
+import CreateResourceScreen from "@/components/resources/CreateResourceScreen";
+import PostDetailScreen from '@/components/posts/PostDetailScreen'; // <--- IMPORT THE NEW SCREEN
+
+const queryClient = new QueryClient();
+
+const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
+  const { isAuthenticated, isLoading } = useAuth();
+
+  if (isLoading) {
+    return <div className="flex items-center justify-center min-h-screen">Loading Session...</div>;
+  }
+  return isAuthenticated ? <>{children}</> : <Navigate to="/" replace />;
+};
+
+const AppRoutes = () => {
+  return (
+    <Routes>
+      <Route path="/" element={<Index />} />
+      <Route path="/login/student" element={<LoginScreen />} />
+      <Route path="/register" element={<div className="min-h-screen flex items-center justify-center">Registration coming soon!</div>} />
+
+      {/* Protected Routes */}
+      <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+      <Route path="/results" element={<ProtectedRoute><ResultsScreen /></ProtectedRoute>} />
+      <Route path="/communities" element={<ProtectedRoute><CommunitiesScreen /></ProtectedRoute>} />
+      <Route path="/communities/:communityId" element={<ProtectedRoute><CommunityDetailScreen /></ProtectedRoute>} />
+      
+      {/* --- ADD OR CONFIRM THIS ROUTE FOR POST DETAIL --- */}
+      <Route 
+        path="/posts/:postId" 
+        element={
+          <ProtectedRoute> {/* Or make it public if posts can be viewed without login */}
+            <PostDetailScreen />
+          </ProtectedRoute>
+        } 
+      />
+      {/* ------------------------------------------------- */}
+
+      <Route path="/attendance" element={<ProtectedRoute><AttendanceScreen /></ProtectedRoute>} />
+      <Route path="/resources" element={<ProtectedRoute><ResourcesScreen /></ProtectedRoute>} />
+      <Route path="/resources/new" element={<ProtectedRoute><CreateResourceScreen /></ProtectedRoute>} />
+      <Route path="/settings" element={<ProtectedRoute><SettingsScreen /></ProtectedRoute>} />
+
+      <Route path="*" element={<NotFound />} />
+    </Routes>
+  );
+};
+
+const App = () => (
+  <QueryClientProvider client={queryClient}>
+    <ThemeProvider defaultTheme="light" storageKey="vite-ui-theme">
+      <TooltipProvider>
+        <Toaster />
+        <Sonner />
+        <AppRoutes />
+      </TooltipProvider>
+    </ThemeProvider>
+  </QueryClientProvider>
+);
+
+export default App;
+--- END OF CORE FILE: src/App.tsx ---
+
+--------------------------------------------------------------
+
+--- START OF CORE FILE: src/types/community.ts ---
+// src/types/community.ts
+
+export interface Author {
+  id: string;
+  _id?: string;
+  name: string;
+  avatarUrl?: string;
+}
+
+// For API responses that might use snake_case
+interface CommunityApiSnakeCase {
+  banner_image_url?: string | null;
+  icon_url?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  member_count?: number;
+  post_count?: number | null;
+  is_member?: boolean;
+}
+
+export interface CommunityBase extends CommunityApiSnakeCase {
+  id: string;
+  _id?: string;
+  name: string;
+  description: string;
+  slug?: string;
+  icon?: string;
+  bannerImage?: string;
+  memberCount: number;
+  postCount?: number | null;
+  is_member?: boolean;
+  tags?: string[];
+  rules?: string[];
+  createdAt?: string;
+  updatedAt?: string;
+  createdBy?: string;
+}
+
+export interface CommunitySummary extends CommunityBase {}
+export interface CommunityDetail extends CommunityBase {}
+
+interface PostApiSnakeCase {
+    content_type?: 'text' | 'image' | 'link';
+    content_text?: string;
+    image_url?: string;
+    link_url?: string;
+    created_at?: string;
+    updated_at?: string;
+    comment_count?: number;
+    user_vote?: 'up' | 'down' | null;
+    last_activity_at?: string;
+}
+
+export interface Post extends PostApiSnakeCase {
+  id: string;
+  _id?: string;
+  title: string;
+  contentType: 'text' | 'image' | 'link';
+  contentText?: string;
+  contentPreview?: string;
+  imageUrl?: string;
+  linkUrl?: string;
+  tags?: string[];
+  author: Author;
+  communityId: string;
+  communityName?: string;
+  communitySlug?: string;
+  communityIcon?: string;
+  community?: CommunitySummary;
+  createdAt: string;
+  updatedAt?: string;
+  upvotes: number;
+  downvotes: number;
+  commentCount: number;
+  userVote: 'up' | 'down' | null;
+  lastActivityAt?: string;
+}
+
+// --- Comment Types ---
+export interface Comment {
+  id: string;
+  _id?: string;
+  postId: string;
+  author: Author;
+  text: string;
+  parentId?: string | null;
+  replyCount: number;
+  upvotes: number;
+  downvotes: number;
+  createdAt: string;
+  updatedAt?: string;
+  userVote: 'up' | 'down' | null;
+  // For API responses that might use snake_case
+  created_at?: string;
+  updated_at?: string;
+  parent_id?: string | null;
+  reply_count?: number;
+  user_vote?: 'up' | 'down' | null; // API might send snake_case
+}
+
+
+// --- API Response Structures ---
+export interface CommunityDetailApiResponse {
+  status: string;
+  data: {
+    community: CommunityDetail;
+  };
+}
+
+export interface VoteApiResponse {
+  status: string;
+  data: {
+    upvotes: number;
+    downvotes: number;
+    user_vote: 'up' | 'down' | null; // API sends snake_case
+  };
+}
+
+export interface JoinLeaveApiResponse {
+    status: string;
+    message?: string;
+    data?: {
+        community: CommunityDetail;
+    };
+}
+
+export interface CreatePostApiResponse {
+  status: string;
+  data: {
+    post: Post;
+  };
+}
+
+export interface PostDetailApiResponse {
+  status: string;
+  data: {
+    post: Post;
+  };
+}
+
+export interface CreateCommentApiResponse {
+  status: string;
+  data: {
+    comment: Comment;
+  };
+}
+
+// For PaginatedResponse<Comment> - make sure PaginatedResponse in apiClient.ts allows for optional 'message'
+// Example for PaginatedResponse in apiClient.ts if not already done:
+// export interface PaginatedResponse<T> {
+//   status: string;
+//   message?: string; // Optional message field
+//   results?: number;
+//   data: T[];
+//   pagination?: { /* ... */ };
+// }
+--- END OF CORE FILE: src/types/community.ts ---
+
+--------------------------------------------------------------
+

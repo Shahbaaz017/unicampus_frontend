@@ -1,104 +1,55 @@
 #!/bin/bash
 
-# Output file where all content will be concatenated
-OUTPUT_FILE="frontend_post_detail_integration.txt"
+# Define the output file
+OUTPUT_FILE="project_context_for_resource_delete.txt"
 
-# Ensure the script is run from the project root (basic check)
-if [ ! -f "package.json" ] || [ ! -d "src" ]; then
-  echo "ERROR: Please run this script from the root of your unicampus_frontend project."
-  echo "       (The directory containing package.json and the src/ folder)"
-  exit 1
-fi
+# Clear the output file if it already exists
+> "$OUTPUT_FILE"
 
-# List of files to concatenate
-# Primary file needed for this integration:
-FILES_TO_COLLECT=(
-  "src/components/posts/PostDetailScreen.tsx" # The screen we are building/integrating
-)
-
-# Optional files if they exist and are relevant
-OPTIONAL_FILES=(
-  "src/components/comments/CommentListItem.tsx"  # If you have a component to render each comment
-  "src/components/comments/CommentForm.tsx"      # If you have a separate form component for new comments
-  "src/components/communities/PostListItem.tsx"  # For context on how posts are displayed in lists and voting
-)
-
-# Always include AuthContext, apiClient, App.tsx (for routing), and your types
-ALWAYS_INCLUDE=(
-  "src/contexts/AuthContext.tsx"
-  "src/lib/apiClient.ts"
-  "src/App.tsx"
-  "src/types/community.ts" # Contains Post, Author, Comment (if you add it) types
-  "src/types/index.ts"     # Or wherever your main types are defined if not in community.ts
-)
-
-
-# Clear the output file or create it with a header
-echo "Frontend files for Post Detail & Comments API integration - Collected on $(date)" > "$OUTPUT_FILE"
-echo "===============================================================================" >> "$OUTPUT_FILE"
+echo "Dumping relevant file contents to $OUTPUT_FILE..."
+echo "-------------------------------------------------" >> "$OUTPUT_FILE"
+echo "PROJECT CONTEXT FOR RESOURCE DELETE FEATURE" >> "$OUTPUT_FILE"
+echo "Generated on: $(date)" >> "$OUTPUT_FILE"
+echo "-------------------------------------------------" >> "$OUTPUT_FILE"
 echo "" >> "$OUTPUT_FILE"
 
-echo "Processing primary file for Post Detail & Comments integration..."
-for FILE_PATH in "${FILES_TO_COLLECT[@]}"; do
+# List of files to dump
+# Adjust these paths if your project structure is different for any of these.
+FILES_TO_DUMP=(
+  "src/types/resource.ts"                 # Or your specific type definition for a resource
+  "src/types/community.ts"                # Included from original tree, might have relevant types
+  "src/components/resources/ResourcesScreen.tsx"
+  "src/components/resources/CreateResourceScreen.tsx" # Might be relevant for consistency
+  "src/lib/apiClient.ts"                  # Your API client
+  "src/lib/utils.ts"                      # For the 'cn' utility if using shadcn/ui
+  "src/components/ui/button.tsx"          # shadcn/ui Button
+  "src/components/ui/alert-dialog.tsx"    # shadcn/ui AlertDialog
+  "src/components/ui/use-toast.ts"        # shadcn/ui useToast hook
+  "src/components/ui/toast.tsx"           # shadcn/ui Toast component definitions
+  "src/components/ui/toaster.tsx"         # shadcn/ui Toaster component
+  "src/App.tsx"                           # Main App component, to see layout and Toaster placement
+  "src/hooks/use-toast.ts"                # Custom toast hook (if different from shadcn/ui's)
+  # Add any other file you think is relevant, for example, if your resource items are a separate component:
+  # "src/components/resources/ResourceListItem.tsx"
+)
+
+for FILE_PATH in "${FILES_TO_DUMP[@]}"; do
+  echo "Processing: $FILE_PATH"
+  echo "FILE: $FILE_PATH" >> "$OUTPUT_FILE"
+  echo "--- START OF FILE ---" >> "$OUTPUT_FILE"
   if [ -f "$FILE_PATH" ]; then
-    echo "--- START OF FILE: $FILE_PATH ---" >> "$OUTPUT_FILE"
     cat "$FILE_PATH" >> "$OUTPUT_FILE"
-    echo "" >> "$OUTPUT_FILE" # Add a newline for better separation
-    echo "--- END OF FILE: $FILE_PATH ---" >> "$OUTPUT_FILE"
-    echo "" >> "$OUTPUT_FILE"
-    echo "--------------------------------------------------------------" >> "$OUTPUT_FILE"
-    echo "" >> "$OUTPUT_FILE"
-    echo "Added: $FILE_PATH"
   else
-    echo "!!! WARNING: Primary file not found (or not yet created): $FILE_PATH !!!" >> "$OUTPUT_FILE"
-    echo "!!! This is okay if PostDetailScreen.tsx is new. Please create it with skeleton code first if so. !!!"
-    echo "!!! WARNING: Primary file not found (or not yet created): $FILE_PATH !!!"
+    echo "--- FILE NOT FOUND AT THIS PATH ---" >> "$OUTPUT_FILE"
   fi
+  echo "--- END OF FILE ---" >> "$OUTPUT_FILE"
+  echo "" >> "$OUTPUT_FILE" # Add a blank line for readability
 done
 
-echo ""
-echo "Processing optional related files (if they exist)..."
-for FILE_PATH in "${OPTIONAL_FILES[@]}"; do
-  if [ -f "$FILE_PATH" ]; then
-    echo "--- START OF FILE (Optional): $FILE_PATH ---" >> "$OUTPUT_FILE"
-    cat "$FILE_PATH" >> "$OUTPUT_FILE"
-    echo "" >> "$OUTPUT_FILE"
-    echo "--- END OF FILE (Optional): $FILE_PATH ---" >> "$OUTPUT_FILE"
-    echo "" >> "$OUTPUT_FILE"
-    echo "--------------------------------------------------------------" >> "$OUTPUT_FILE"
-    echo "" >> "$OUTPUT_FILE"
-    echo "Added (Optional): $FILE_PATH"
-  else
-    echo "Optional file not found, skipping: $FILE_PATH"
-  fi
-done
+echo "-------------------------------------------------" >> "$OUTPUT_FILE"
+echo "END OF DUMP" >> "$OUTPUT_FILE"
+echo "-------------------------------------------------" >> "$OUTPUT_FILE"
 
 echo ""
-echo "Processing core context/utility/routing/type files..."
-for FILE_PATH in "${ALWAYS_INCLUDE[@]}"; do
-  if [ -f "$FILE_PATH" ]; then
-    echo "--- START OF CORE FILE: $FILE_PATH ---" >> "$OUTPUT_FILE"
-    cat "$FILE_PATH" >> "$OUTPUT_FILE"
-    echo "" >> "$OUTPUT_FILE"
-    echo "--- END OF CORE FILE: $FILE_PATH ---" >> "$OUTPUT_FILE"
-    echo "" >> "$OUTPUT_FILE"
-    echo "--------------------------------------------------------------" >> "$OUTPUT_FILE"
-    echo "" >> "$OUTPUT_FILE"
-    echo "Added (Core): $FILE_PATH"
-  else
-    # For src/types/index.ts, it's okay if it doesn't exist, types might be solely in community.ts
-    if [[ "$FILE_PATH" == "src/types/index.ts" ]]; then
-        echo "Core file (src/types/index.ts) not found, skipping (this might be okay)."
-    else
-        echo "!!! WARNING: Core file not found, skipping: $FILE_PATH !!!" >> "$OUTPUT_FILE"
-        echo "!!! WARNING: Core file not found, skipping: $FILE_PATH !!!"
-    fi
-  fi
-done
-
-
-echo ""
-echo "All requested file contents have been written to: $OUTPUT_FILE"
-echo "Please open $OUTPUT_FILE, copy its entire content, and paste it for me."
-echo "If 'src/components/posts/PostDetailScreen.tsx' was not found and you haven't created it yet,"
-echo "please create a basic skeleton for it first (as shown in the previous message) and re-run this script."
+echo "Done. The content of the specified files has been dumped into: $OUTPUT_FILE"
+echo "Please provide this file."

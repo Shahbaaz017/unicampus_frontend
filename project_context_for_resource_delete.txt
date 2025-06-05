@@ -1,0 +1,1485 @@
+-------------------------------------------------
+PROJECT CONTEXT FOR RESOURCE DELETE FEATURE
+Generated on: Wed Jun  4 20:05:44 UTC 2025
+-------------------------------------------------
+
+FILE: src/types/resource.ts
+--- START OF FILE ---
+--- FILE NOT FOUND AT THIS PATH ---
+--- END OF FILE ---
+
+FILE: src/types/community.ts
+--- START OF FILE ---
+// src/types/community.ts
+
+export interface Author {
+  id: string; // Primary ID used in frontend, critical for ownership checks
+  _id?: string;
+  name: string;
+  usn?: string;
+  avatarUrl?: string;
+}
+
+// Community types (assuming these are already well-defined from previous steps)
+interface CommunityApiSnakeCase { /* ... */ }
+export interface CommunityBase extends CommunityApiSnakeCase { /* ... id, name, etc. ... */
+  id: string;
+  _id?: string;
+  name: string;
+  description: string;
+  slug?: string;
+  icon?: string;
+  bannerImage?: string;
+  memberCount: number;
+  postCount?: number | null;
+  is_member?: boolean;
+  tags?: string[];
+  rules?: string[];
+  createdAt?: string;
+  updatedAt?: string;
+  createdBy?: string; // Should be Author or at least user ID string
+}
+export interface CommunitySummary extends CommunityBase {}
+export interface CommunityDetail extends CommunityBase {}
+
+// Post types
+interface PostApiSnakeCase { /* ... */ }
+export interface Post extends PostApiSnakeCase {
+  id: string; // Critical for API calls
+  _id?: string;
+  title: string;
+  contentType: 'text' | 'image' | 'link';
+  contentText?: string;
+  contentPreview?: string;
+  imageUrl?: string;
+  linkUrl?: string;
+  tags?: string[];
+  author: Author; // Critical: must have author.id for ownership checks
+  communityId: string;
+  communityName?: string;
+  communitySlug?: string;
+  communityIcon?: string;
+  community?: CommunitySummary;
+  createdAt: string;
+  updatedAt?: string;
+  upvotes: number;
+  downvotes: number;
+  commentCount: number;
+  userVote: 'up' | 'down' | null;
+  lastActivityAt?: string;
+}
+
+// Comment types
+export interface Comment {
+  id: string; // Critical
+  _id?: string;
+  postId: string;
+  author: Author; // Critical: must have author.id for ownership checks
+  text: string;
+  parentId?: string | null;
+  replyCount: number;
+  upvotes: number;
+  downvotes: number;
+  createdAt: string;
+  updatedAt?: string;
+  userVote: 'up' | 'down' | null;
+  // Allow potential snake_case fields from API before normalization
+  created_at?: string;
+  updated_at?: string;
+  parent_id?: string | null;
+  reply_count?: number;
+  user_vote?: 'up' | 'down' | null;
+}
+
+// --- API Response Structures ---
+export interface CommunityDetailApiResponse { status: string; data: { community: CommunityDetail; }; }
+export interface VoteApiResponse { status: string; data: { upvotes: number; downvotes: number; user_vote: 'up' | 'down' | null; }; }
+export interface JoinLeaveApiResponse { status: string; message?: string; data?: { community: CommunityDetail; }; }
+export interface CreatePostApiResponse { status: string; data: { post: Post; }; }
+export interface PostDetailApiResponse { status: string; data: { post: Post; }; }
+export interface CreateCommentApiResponse { status: string; data: { comment: Comment; }; }
+export interface DeleteApiResponse { status: string; message?: string; } // Generic for delete operations--- END OF FILE ---
+
+FILE: src/components/resources/ResourcesScreen.tsx
+--- START OF FILE ---
+// src/components/resources/ResourcesScreen.tsx
+import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Card, CardContent } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Input } from '@/components/ui/input';
+import { PlusCircle, Download, Link as LinkIcon, FileText, AlertCircle, Image as ImageIcon, FileArchive, FileAudio, FileVideo } from 'lucide-react'; // Added more icons
+import BottomNavigation from '@/components/layout/BottomNavigation';
+import { useAuth } from '@/contexts/AuthContext';
+import apiClient, { PaginatedResponse } from '@/lib/apiClient';
+import { toast } from '@/hooks/use-toast';
+// Removed: import { API_BASE_URL } from '@/config'; // We'll use import.meta.env directly
+
+interface Resource {
+  id: string;
+  title: string;
+  uploaderId: string;
+  resourceType: 'file' | 'link';
+  semesterTag?: string;
+  category: string;
+  description?: string;
+  tags?: string[];
+  originalFilename?: string;
+  fileSize?: number;
+  mimeType?: string;
+  linkUrl?: string;
+  downloadCount: number;
+  downloadUrl?: string; // This is what your backend API doc says it constructs
+  createdAt: string;
+  updatedAt: string;
+  uploaderName?: string; // You might populate this later
+}
+
+const SEMESTERS = ['1', '2', '3', '4', '5', '6', '7', '8'];
+const CATEGORIES = [
+    { value: 'notes', label: 'Notes' },
+    { value: 'pyqs', label: 'PYQs' },
+    { value: 'textbooks', label: 'Books' },
+    { value: 'syllabus', label: 'Syllabus' },
+    { value: 'lab', label: 'Lab' },
+    { value: 'assignments', label: 'Assignments' },
+    { value: 'other', label: 'Other' },
+];
+
+const formatFileSize = (bytes?: number): string => {
+  if (bytes === undefined || bytes === null || isNaN(bytes) || bytes === 0) return 'N/A';
+  const k = 1024;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+};
+
+const ResourcesScreen = () => {
+  const navigate = useNavigate();
+  const { isAuthenticated, isLoading: authIsLoading, accessToken } = useAuth();
+
+  const [resources, setResources] = useState<Resource[]>([]);
+  const [isLoadingResources, setIsLoadingResources] = useState(true);
+  const [selectedSemester, setSelectedSemester] = useState<string>('all');
+  const [currentCategory, setCurrentCategory] = useState<string>(CATEGORIES[0].value);
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [totalPages, setTotalPages] = useState<number>(1);
+  const [totalResults, setTotalResults] = useState<number>(0);
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState<string>('');
+
+  useEffect(() => {
+    const handler = setTimeout(() => setDebouncedSearchQuery(searchQuery), 500);
+    return () => clearTimeout(handler);
+  }, [searchQuery]);
+
+  const fetchResources = useCallback(async (page = 1) => {
+    if (!isAuthenticated) {
+      setIsLoadingResources(false);
+      return;
+    }
+    setIsLoadingResources(true);
+    const params = new URLSearchParams();
+    params.append('page', page.toString());
+    params.append('limit', '10');
+    if (selectedSemester !== 'all') params.append('semester', selectedSemester);
+    // Ensure currentCategory is passed, even if 'all' is not a backend filter,
+    // your backend should handle an 'all' category by not filtering or have a default.
+    // For now, assuming API filters by category if provided.
+    params.append('category', currentCategory);
+    if (debouncedSearchQuery.trim()) params.append('searchQuery', debouncedSearchQuery.trim());
+
+    try {
+      const response = await apiClient<PaginatedResponse<Resource>>(`/resources?${params.toString()}`);
+      if (response.status === 'success' && Array.isArray(response.data)) {
+        setResources(response.data);
+        const itemsPerPage = 10;
+        if (response.results) {
+            setTotalResults(response.results);
+            setTotalPages(Math.ceil(response.results / itemsPerPage));
+        } else {
+            // If API doesn't return total results, pagination on frontend is limited.
+            setTotalResults(response.data.length + (page -1) * itemsPerPage); // Rough estimate if more pages exist
+            setTotalPages(page + (response.data.length < itemsPerPage ? 0 : 1) ); // Guess if there's a next page
+        }
+        setCurrentPage(page);
+      } else {
+        setResources([]); setTotalPages(1); setTotalResults(0);
+        toast({ title: "Resources", description: response.message || "Could not load resources for this category.", variant: "default" });
+      }
+    } catch (error: any) {
+      toast({ title: "Error Fetching Resources", description: error.message || "Could not load resources.", variant: "destructive" });
+      setResources([]); setTotalPages(1); setTotalResults(0);
+    } finally {
+      setIsLoadingResources(false);
+    }
+  }, [isAuthenticated, selectedSemester, currentCategory, debouncedSearchQuery]);
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      fetchResources(1); // Fetch page 1 when filters change or on initial load
+    } else if (!authIsLoading) {
+        setIsLoadingResources(false);
+    }
+  }, [isAuthenticated, authIsLoading, fetchResources]);
+
+
+  const handleSemesterChange = (value: string) => setSelectedSemester(value);
+  const handleCategoryChange = (value: string) => {
+    setCurrentCategory(value);
+    // Fetching will be triggered by useEffect watching `fetchResources` which depends on `currentCategory`
+  };
+  const handleSearchChange = (event: React.ChangeEvent<HTMLInputElement>) => setSearchQuery(event.target.value);
+
+  const handleDownload = (resource: Resource) => {
+    if (!accessToken) {
+        toast({ title: "Authentication Error", description: "Please login to download.", variant: "destructive" });
+        return;
+    }
+    const rawApiBaseUrlFromEnv = import.meta.env.VITE_API_BASE_URL; // e.g., http://host/api/v1
+
+    if (!rawApiBaseUrlFromEnv) {
+        toast({ title: "Configuration Error", description: "API Base URL is not configured.", variant: "destructive" });
+        return;
+    }
+    
+    // console.log("--- Download Debug ---");
+    // console.log("VITE_API_BASE_URL:", rawApiBaseUrlFromEnv);
+    // console.log("Original resource.downloadUrl:", resource.downloadUrl);
+
+    if (resource.resourceType === 'file' && resource.id && resource.downloadUrl) {
+      let fullDownloadUrl: string;
+
+      if (resource.downloadUrl.startsWith('http')) {
+        // If resource.downloadUrl is already a full absolute URL (e.g., from S3 signed URL)
+        fullDownloadUrl = resource.downloadUrl;
+      } else if (resource.downloadUrl.startsWith('/api/v1/')) {
+        // If resource.downloadUrl starts with /api/v1/ (e.g., "/api/v1/resources/ID/download")
+        // We need to prepend only the scheme and host.
+        // Example: VITE_API_BASE_URL = "http://localhost:3001/api/v1"
+        // We need "http://localhost:3001"
+        const serviceRootUrl = rawApiBaseUrlFromEnv.substring(0, rawApiBaseUrlFromEnv.indexOf('/api/v1'));
+        fullDownloadUrl = `${serviceRootUrl}${resource.downloadUrl}`;
+      } else if (resource.downloadUrl.startsWith('/resources/')) {
+        // If resource.downloadUrl is relative to /api/v1 (e.g., "/resources/ID/download")
+        // Prepend the full VITE_API_BASE_URL
+        fullDownloadUrl = `${rawApiBaseUrlFromEnv}${resource.downloadUrl}`;
+      } else {
+        // Fallback or if resource.downloadUrl is some other relative path or unexpected format
+        console.warn("Unexpected resource.downloadUrl format, attempting default construction with full VITE_API_BASE_URL:", resource.downloadUrl);
+        fullDownloadUrl = `${rawApiBaseUrlFromEnv}${resource.downloadUrl.startsWith('/') ? '' : '/'}${resource.downloadUrl}`;
+      }
+      
+      // console.log("Constructed fullDownloadUrl for fetch:", fullDownloadUrl);
+
+      fetch(fullDownloadUrl, {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${accessToken}` },
+      })
+      .then(response => {
+        if (!response.ok) {
+            return response.text().then(text => {
+                throw new Error(`Download failed: ${response.statusText} (${response.status}). Server: ${text.substring(0,100)}`);
+            });
+        }
+        const disposition = response.headers.get('content-disposition');
+        let filename = resource.originalFilename || `${resource.title || 'download'}.${resource.mimeType?.split('/')[1] || 'bin'}`;
+        if (disposition?.includes('attachment')) {
+            const filenameMatch = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(disposition);
+            if (filenameMatch?.[1]) filename = decodeURIComponent(filenameMatch[1].replace(/['"]/g, ''));
+        }
+        return response.blob().then(blob => ({ blob, filename }));
+      })
+      .then(({ blob, filename }) => {
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = filename; document.body.appendChild(a);
+        a.click(); a.remove(); window.URL.revokeObjectURL(url);
+        toast({ title: "Download Started", description: filename });
+      })
+      .catch(err => {
+          console.error("Download error object:", err);
+          toast({ title: "Download Failed", description: err.message || "Could not download the file.", variant: "destructive" });
+      });
+
+    } else if (resource.resourceType === 'link' && resource.linkUrl) {
+      window.open(resource.linkUrl, '_blank', 'noopener,noreferrer');
+    }
+  };
+
+  const getIcon = (type: Resource['resourceType'], mimeType?: string) => {
+    if (type === 'link') return <LinkIcon className="h-6 w-6 text-blue-500" />;
+    if (type === 'file') {
+      if (mimeType?.includes('pdf')) return <FileText className="h-6 w-6 text-red-600" />;
+      if (mimeType?.includes('image')) return <ImageIcon className="h-6 w-6 text-green-600" />;
+      if (mimeType?.includes('audio')) return <FileAudio className="h-6 w-6 text-purple-600" />;
+      if (mimeType?.includes('video')) return <FileVideo className="h-6 w-6 text-orange-600" />;
+      if (mimeType?.includes('zip') || mimeType?.includes('archive')) return <FileArchive className="h-6 w-6 text-yellow-600" />;
+      return <FileText className="h-6 w-6 text-gray-500" />; // Generic file
+    }
+    return <AlertCircle className="h-6 w-6 text-gray-400" />; // Default/unknown
+  };
+
+  if (authIsLoading) return <div className="flex items-center justify-center min-h-screen">Loading Session...</div>;
+  if (!isAuthenticated && !authIsLoading) return <div className="p-4 text-center">Please log in to view resources.</div>;
+
+  return (
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 pb-20">
+      <div className="bg-white dark:bg-gray-800 shadow-sm px-4 py-6 sticky top-0 z-40">
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Resources</h1>
+          <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+            <Input type="search" placeholder="Search resources..." value={searchQuery} onChange={handleSearchChange} className="w-full sm:w-64 dark:bg-gray-700 dark:border-gray-600 dark:text-white" />
+            <Select value={selectedSemester} onValueChange={handleSemesterChange}>
+              <SelectTrigger className="w-full sm:w-36 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                <SelectValue placeholder="Semester" />
+              </SelectTrigger>
+              <SelectContent className="dark:bg-gray-800 dark:text-white">
+                <SelectItem value="all">All Semesters</SelectItem>
+                {SEMESTERS.map(sem => <SelectItem key={sem} value={sem}>Sem {sem}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      </div>
+
+      <div className="p-4">
+        <Tabs value={currentCategory} onValueChange={handleCategoryChange} className="w-full">
+          <TabsList className="grid w-full grid-cols-2 md:grid-cols-4 gap-1 mb-6">
+            {CATEGORIES.map(cat => (
+              <TabsTrigger key={cat.value} value={cat.value} className="text-xs sm:text-sm data-[state=active]:bg-unicampus-red data-[state=active]:text-white">
+                {cat.label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+
+            <TabsContent value={currentCategory} className="mt-0 space-y-4">
+              {isLoadingResources ? (
+                <div className="text-center p-8 text-gray-600 dark:text-gray-400">Loading {CATEGORIES.find(c=>c.value === currentCategory)?.label.toLowerCase()}...</div>
+              ) : resources.length > 0 ? (
+                resources.map((resource, index) => (
+                    <Card 
+                        key={resource.id} 
+                        className="animate-slide-up hover:shadow-lg transition-all dark:bg-gray-800" 
+                        style={{ animationDelay: `${index * 0.05}s` }}
+                    >
+                    <CardContent className="p-4">
+                        <div className="flex items-start space-x-3">
+                        <div className="pt-1">{getIcon(resource.resourceType, resource.mimeType)}</div>
+                        <div className="flex-1 min-w-0"> {/* Added min-w-0 for better truncation */}
+                            <h3 className="font-medium text-gray-900 dark:text-white truncate" title={resource.title}>{resource.title}</h3>
+                            {resource.description && <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 max-w-prose truncate" title={resource.description}>{resource.description}</p>}
+                            <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                            By: {resource.uploaderName || 'User'} | {new Date(resource.createdAt).toLocaleDateString()}
+                            </p>
+                            <div className="flex items-center flex-wrap gap-2 mt-2">
+                            {resource.resourceType === 'file' && resource.fileSize !== undefined && (
+                                <Badge variant="outline" className="text-xs">{formatFileSize(resource.fileSize)}</Badge>
+                            )}
+                            {resource.semesterTag && (
+                                <Badge className="bg-unicampus-red/10 text-unicampus-red border-unicampus-red/20 text-xs">Sem {resource.semesterTag}</Badge>
+                            )}
+                            {resource.tags?.map(tag => <Badge key={tag} variant="secondary" className="text-xs">{tag}</Badge>)}
+                            </div>
+                        </div>
+                        <Button variant="ghost" size="icon" onClick={() => handleDownload(resource)} title={resource.resourceType === 'file' ? 'Download File' : 'Open Link'}>
+                            {resource.resourceType === 'file' ? <Download className="h-5 w-5 text-unicampus-red" /> : <LinkIcon className="h-5 w-5 text-unicampus-red" />}
+                        </Button>
+                        </div>
+                    </CardContent>
+                    </Card>
+                ))
+              ) : (
+                <Card className="dark:bg-gray-800">
+                    <CardContent className="p-8 text-center">
+                        <div className="text-4xl mb-4 text-gray-400 dark:text-gray-500">📚</div>
+                        <p className="text-gray-600 dark:text-gray-400">
+                        No {CATEGORIES.find(c => c.value === currentCategory)?.label.toLowerCase()} found
+                        {selectedSemester !== 'all' && ` for Semester ${selectedSemester}`}
+                        {debouncedSearchQuery && ` matching "${debouncedSearchQuery}"`}.
+                        </p>
+                    </CardContent>
+                </Card>
+              )}
+            </TabsContent>
+        </Tabs>
+
+        {totalPages > 1 && !isLoadingResources && resources.length > 0 && (
+            <div className="flex justify-center items-center space-x-2 mt-8">
+                <Button onClick={() => fetchResources(currentPage - 1)} disabled={currentPage <= 1} variant="outline">Previous</Button>
+                <span className="text-sm text-gray-700 dark:text-gray-300">Page {currentPage} of {totalPages} ({totalResults} items)</span>
+                <Button onClick={() => fetchResources(currentPage + 1)} disabled={currentPage >= totalPages} variant="outline">Next</Button>
+            </div>
+        )}
+
+        <div className="fixed bottom-24 right-4 z-50">
+          <Button
+            className="w-14 h-14 rounded-full bg-unicampus-red hover:bg-unicampus-red-dark shadow-lg text-white"
+            title="Add New Resource"
+            onClick={() => navigate('/resources/new')}
+          >
+            <PlusCircle size={28} />
+          </Button>
+        </div>
+      </div>
+      <BottomNavigation />
+    </div>
+  );
+};
+
+export default ResourcesScreen;--- END OF FILE ---
+
+FILE: src/components/resources/CreateResourceScreen.tsx
+--- START OF FILE ---
+// src/components/resources/CreateResourceScreen.tsx
+import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { ArrowLeft, UploadCloud } from 'lucide-react';
+import { useAuth } from '@/contexts/AuthContext';
+import apiClient from '@/lib/apiClient';
+import { toast } from '@/hooks/use-toast';
+
+// Constants (can be moved to a shared file if used elsewhere)
+const SEMESTERS = ['1', '2', '3', '4', '5', '6', '7', '8'];
+const CATEGORIES = [
+    { value: 'notes', label: 'Notes' },
+    { value: 'pyqs', label: 'PYQs / Question Papers' },
+    { value: 'textbooks', label: 'Textbooks / Reference Books' },
+    { value: 'syllabus', label: 'Syllabus' },
+    { value: 'lab', label: 'Lab Manuals / Records' },
+    { value: 'assignments', label: 'Assignments' },
+    { value: 'other', label: 'Other' },
+];
+const RESOURCE_TYPES = [
+    { value: 'file', label: 'Upload File' },
+    { value: 'link', label: 'Share Link' },
+];
+
+interface ResourceFormData {
+  title: string;
+  description: string;
+  resource_type: 'file' | 'link';
+  category: string;
+  semester_tag: string;
+  tags: string; // Comma-separated string for input, will be converted to array
+  link_url: string;
+  resourceFile: File | null;
+}
+
+const CreateResourceScreen = () => {
+  const navigate = useNavigate();
+  const { accessToken } = useAuth(); // Needed for API calls if apiClient doesn't grab it automatically for FormData
+  const [formData, setFormData] = useState<ResourceFormData>({
+    title: '',
+    description: '',
+    resource_type: 'file',
+    category: CATEGORIES[0].value,
+    semester_tag: SEMESTERS[0],
+    tags: '',
+    link_url: '',
+    resourceFile: null,
+  });
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({ ...prev, [name]: value }));
+  };
+
+  const handleSelectChange = (name: keyof ResourceFormData, value: string) => {
+    setFormData(prev => ({ ...prev, [name]: value }));
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      setFormData(prev => ({ ...prev, resourceFile: e.target.files![0] }));
+    } else {
+      setFormData(prev => ({ ...prev, resourceFile: null }));
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!accessToken) {
+        toast({ title: "Authentication Error", description: "You must be logged in to create a resource.", variant: "destructive" });
+        return;
+    }
+
+    // Basic Validation
+    if (!formData.title.trim()) {
+      toast({ title: "Validation Error", description: "Title is required.", variant: "destructive" });
+      return;
+    }
+    if (formData.resource_type === 'link' && !formData.link_url.trim()) {
+      toast({ title: "Validation Error", description: "Link URL is required for link type.", variant: "destructive" });
+      return;
+    }
+    if (formData.resource_type === 'file' && !formData.resourceFile) {
+      toast({ title: "Validation Error", description: "File is required for file type.", variant: "destructive" });
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    const dataToSubmit = new FormData();
+    dataToSubmit.append('title', formData.title.trim());
+    dataToSubmit.append('description', formData.description.trim());
+    dataToSubmit.append('resource_type', formData.resource_type);
+    dataToSubmit.append('category', formData.category);
+    dataToSubmit.append('semester_tag', formData.semester_tag);
+    if (formData.tags.trim()) {
+        dataToSubmit.append('tags', formData.tags.trim()); // API expects comma-separated string
+    }
+
+    if (formData.resource_type === 'link') {
+      dataToSubmit.append('link_url', formData.link_url.trim());
+    } else if (formData.resource_type === 'file' && formData.resourceFile) {
+      dataToSubmit.append('resourceFile', formData.resourceFile);
+    }
+
+    try {
+      // apiClient handles Authorization header for FormData if configured correctly
+      // For FormData, Content-Type is set by the browser automatically
+      const response = await apiClient<any>('/resources', { // Define specific success response type if known
+        method: 'POST',
+        data: dataToSubmit,
+        // No need to set Content-Type for FormData; browser does it with boundary
+      });
+
+      toast({
+        title: "Resource Created!",
+        description: `${formData.title} has been successfully added.`,
+      });
+      navigate('/resources'); // Navigate back to resources list
+    } catch (error: any) {
+      console.error("Failed to create resource:", error);
+      toast({
+        title: "Error Creating Resource",
+        description: error.message || "An unexpected error occurred.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 p-4 sm:p-6">
+      <div className="max-w-2xl mx-auto">
+        <Button variant="ghost" onClick={() => navigate(-1)} className="mb-4 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800">
+          <ArrowLeft className="mr-2 h-4 w-4" /> Back to Resources
+        </Button>
+
+        <Card className="dark:bg-gray-800">
+          <CardHeader>
+            <CardTitle className="text-2xl font-bold text-gray-900 dark:text-white">Add New Resource</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={handleSubmit} className="space-y-6">
+              <div>
+                <Label htmlFor="title" className="font-medium text-gray-700 dark:text-gray-300">Title *</Label>
+                <Input id="title" name="title" value={formData.title} onChange={handleChange} required className="mt-1 dark:bg-gray-700 dark:border-gray-600 dark:text-white" />
+              </div>
+
+              <div>
+                <Label htmlFor="description" className="font-medium text-gray-700 dark:text-gray-300">Description (Optional)</Label>
+                <Textarea id="description" name="description" value={formData.description} onChange={handleChange} rows={3} className="mt-1 dark:bg-gray-700 dark:border-gray-600 dark:text-white" />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                <div>
+                  <Label htmlFor="resource_type" className="font-medium text-gray-700 dark:text-gray-300">Resource Type *</Label>
+                  <Select name="resource_type" value={formData.resource_type} onValueChange={(value) => handleSelectChange('resource_type', value)}>
+                    <SelectTrigger className="mt-1 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                      <SelectValue placeholder="Select type" />
+                    </SelectTrigger>
+                    <SelectContent className="dark:bg-gray-800 dark:text-white">
+                      {RESOURCE_TYPES.map(type => <SelectItem key={type.value} value={type.value}>{type.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div>
+                  <Label htmlFor="category" className="font-medium text-gray-700 dark:text-gray-300">Category *</Label>
+                  <Select name="category" value={formData.category} onValueChange={(value) => handleSelectChange('category', value)}>
+                    <SelectTrigger className="mt-1 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                      <SelectValue placeholder="Select category" />
+                    </SelectTrigger>
+                    <SelectContent className="dark:bg-gray-800 dark:text-white">
+                      {CATEGORIES.map(cat => <SelectItem key={cat.value} value={cat.value}>{cat.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              
+              {formData.resource_type === 'link' && (
+                <div>
+                  <Label htmlFor="link_url" className="font-medium text-gray-700 dark:text-gray-300">Link URL *</Label>
+                  <Input id="link_url" name="link_url" type="url" value={formData.link_url} onChange={handleChange} placeholder="https://example.com/resource" required={formData.resource_type === 'link'} className="mt-1 dark:bg-gray-700 dark:border-gray-600 dark:text-white" />
+                </div>
+              )}
+
+              {formData.resource_type === 'file' && (
+                <div>
+                  <Label htmlFor="resourceFile" className="font-medium text-gray-700 dark:text-gray-300">Upload File *</Label>
+                  <div className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 dark:border-gray-600 border-dashed rounded-md">
+                    <div className="space-y-1 text-center">
+                      <UploadCloud className="mx-auto h-12 w-12 text-gray-400" />
+                      <div className="flex text-sm text-gray-600 dark:text-gray-400">
+                        <label htmlFor="resourceFile_input" className="relative cursor-pointer bg-white dark:bg-gray-700 rounded-md font-medium text-unicampus-red hover:text-unicampus-red-dark focus-within:outline-none focus-within:ring-2 focus-within:ring-offset-2 focus-within:ring-unicampus-red">
+                          <span>Upload a file</span>
+                          <input id="resourceFile_input" name="resourceFile_input" type="file" className="sr-only" onChange={handleFileChange} required={formData.resource_type === 'file'} />
+                        </label>
+                        <p className="pl-1">or drag and drop</p>
+                      </div>
+                      <p className="text-xs text-gray-500 dark:text-gray-500">PDF, DOCX, PNG, JPG, etc. (Max 10MB)</p>
+                      {formData.resourceFile && <p className="text-sm text-gray-700 dark:text-gray-300 mt-2">Selected: {formData.resourceFile.name}</p>}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                 <div>
+                  <Label htmlFor="semester_tag" className="font-medium text-gray-700 dark:text-gray-300">Semester Tag *</Label>
+                  <Select name="semester_tag" value={formData.semester_tag} onValueChange={(value) => handleSelectChange('semester_tag', value)}>
+                    <SelectTrigger className="mt-1 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                      <SelectValue placeholder="Select semester" />
+                    </SelectTrigger>
+                    <SelectContent className="dark:bg-gray-800 dark:text-white">
+                      {SEMESTERS.map(sem => <SelectItem key={sem} value={sem}>Sem {sem}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label htmlFor="tags" className="font-medium text-gray-700 dark:text-gray-300">Tags (comma-separated, optional)</Label>
+                  <Input id="tags" name="tags" value={formData.tags} onChange={handleChange} placeholder="e.g., important, module1, unit2" className="mt-1 dark:bg-gray-700 dark:border-gray-600 dark:text-white" />
+                </div>
+              </div>
+
+              <div className="pt-2">
+                <Button type="submit" className="w-full bg-unicampus-red hover:bg-unicampus-red-dark text-white" disabled={isSubmitting}>
+                  {isSubmitting ? 'Submitting...' : 'Add Resource'}
+                </Button>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+};
+
+export default CreateResourceScreen;--- END OF FILE ---
+
+FILE: src/lib/apiClient.ts
+--- START OF FILE ---
+// src/lib/apiClient.ts
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001/api/v1';
+
+// Helper to get token from localStorage (AuthContext will manage this)
+const getAuthToken = (): string | null => {
+  return localStorage.getItem('accessToken');
+};
+
+interface ApiClientOptions extends RequestInit {
+  data?: any;
+  isPublic?: boolean; // To bypass auth header for public routes
+  isRefreshTokenRequest?: boolean; // Special flag for refresh token request
+}
+
+// Define a generic error structure your API might return
+interface ApiError {
+  status: string; // "fail" or "error"
+  message: string;
+  // Add other potential error fields
+}
+
+export interface PaginatedResponse<T> {
+  status: string;
+  results?: number; // If your API returns total results
+  data: T[]; // Assuming data is always an array for paginated lists
+  // Add other pagination fields if your API returns them (e.g., totalPages, currentPage)
+}
+
+
+async function apiClient<T>(
+  endpoint: string,
+  { data, headers: customHeaders, isPublic = false, isRefreshTokenRequest = false, ...customConfig }: ApiClientOptions = {}
+): Promise<T> {
+  const config: RequestInit = {
+    method: data ? 'POST' : 'GET', // Default to POST if data is provided
+    ...customConfig,
+    headers: {
+      ...(data && !(data instanceof FormData) && { 'Content-Type': 'application/json' }), // Don't set for FormData
+      ...customHeaders,
+    },
+  };
+
+  if (!isPublic) {
+    const token = isRefreshTokenRequest ? localStorage.getItem('refreshToken') : getAuthToken();
+    if (token) {
+      config.headers = {
+        ...config.headers,
+        Authorization: `Bearer ${token}`,
+      };
+    } else if (endpoint !== '/auth/login/student' && !endpoint.startsWith('/app/info')) {
+      // For non-public routes (excluding login and app info), if no token, it's an issue.
+      // AuthContext will handle redirect or state change.
+      console.warn(`No auth token found for protected route: ${endpoint}`);
+      // Throw an error or let AuthContext handle this by checking isAuthenticated
+      return Promise.reject({ status: 401, message: 'Authentication token is missing.' });
+    }
+  }
+
+  if (data) {
+    if (data instanceof FormData) {
+      config.body = data; // FormData handles its own content type
+    } else {
+      config.body = JSON.stringify(data);
+    }
+  }
+
+  const response = await fetch(`${API_BASE_URL}${endpoint}`, config);
+
+  if (!response.ok) {
+    // Attempt to parse error JSON, otherwise use statusText
+    let errorData: ApiError | { message: string };
+    try {
+      errorData = await response.json();
+      if (typeof errorData !== 'object' || !('message' in errorData)) {
+        // If the parsed JSON doesn't have a message, create one
+        errorData = { message: response.statusText || 'Unknown error occurred' };
+      }
+    } catch (e) {
+      errorData = { message: response.statusText || 'Failed to parse error response.' };
+    }
+    // Add status code to the rejected error object
+    return Promise.reject({ httpStatus: response.status, ...errorData });
+  }
+
+  if (response.status === 204 || response.headers.get('Content-Length') === '0') {
+    // For 204 No Content or empty responses, resolve with a success indicator or undefined.
+    // Depending on T, you might want to cast or return a specific success object.
+    return { status: 'success', message: 'Operation successful' } as unknown as T;
+  }
+
+  return response.json() as Promise<T>;
+}
+
+export default apiClient;--- END OF FILE ---
+
+FILE: src/lib/utils.ts
+--- START OF FILE ---
+// src/lib/utils.ts
+import { type ClassValue, clsx } from "clsx"
+import { twMerge } from "tailwind-merge"
+import { Author } from '@/types/community'; // Ensure this path is correct for your Author type
+
+export function cn(...inputs: ClassValue[]) { // This is likely from shadcn/ui setup
+  return twMerge(clsx(inputs))
+}
+
+// 👇 ENSURE THIS FUNCTION IS EXACTLY AS DEFINED AND EXPORTED
+export const formatAuthorDisplay = (author?: Author): string => {
+  if (!author) return "Unknown User";
+  
+  const namePart = author.name || "User";
+  
+  const usnSuffix = author.usn && author.usn.length >= 3 
+                    ? ` (${author.usn.slice(-3)})` 
+                    : (author.usn ? ` (${author.usn})` : ""); 
+
+  return `${namePart}${usnSuffix}`;
+};
+
+// 👇 ENSURE THIS FUNCTION IS ALSO EXPORTED
+export const formatTimeAgo = (isoDate?: string): string => {
+    if (!isoDate) return 'some time ago';
+    const date = new Date(isoDate);
+    const now = new Date();
+    const diffInSeconds = Math.floor((now.getTime() - date.getTime()) / 1000);
+
+    if (diffInSeconds < 5) return 'Just now';
+    if (diffInSeconds < 60) return `${diffInSeconds}s ago`;
+
+    const diffInMinutes = Math.floor(diffInSeconds / 60);
+    if (diffInMinutes < 60) return `${diffInMinutes}m ago`;
+
+    const diffInHours = Math.floor(diffInMinutes / 60);
+    if (diffInHours < 24) return `${diffInHours}h ago`;
+
+    const diffInDays = Math.floor(diffInHours / 24);
+    if (diffInDays < 7) return `${diffInDays}d ago`;
+    
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+};--- END OF FILE ---
+
+FILE: src/components/ui/button.tsx
+--- START OF FILE ---
+import * as React from "react"
+import { Slot } from "@radix-ui/react-slot"
+import { cva, type VariantProps } from "class-variance-authority"
+
+import { cn } from "@/lib/utils"
+
+const buttonVariants = cva(
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+  {
+    variants: {
+      variant: {
+        default: "bg-primary text-primary-foreground hover:bg-primary/90",
+        destructive:
+          "bg-destructive text-destructive-foreground hover:bg-destructive/90",
+        outline:
+          "border border-input bg-background hover:bg-accent hover:text-accent-foreground",
+        secondary:
+          "bg-secondary text-secondary-foreground hover:bg-secondary/80",
+        ghost: "hover:bg-accent hover:text-accent-foreground",
+        link: "text-primary underline-offset-4 hover:underline",
+      },
+      size: {
+        default: "h-10 px-4 py-2",
+        sm: "h-9 rounded-md px-3",
+        lg: "h-11 rounded-md px-8",
+        icon: "h-10 w-10",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+      size: "default",
+    },
+  }
+)
+
+export interface ButtonProps
+  extends React.ButtonHTMLAttributes<HTMLButtonElement>,
+    VariantProps<typeof buttonVariants> {
+  asChild?: boolean
+}
+
+const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
+  ({ className, variant, size, asChild = false, ...props }, ref) => {
+    const Comp = asChild ? Slot : "button"
+    return (
+      <Comp
+        className={cn(buttonVariants({ variant, size, className }))}
+        ref={ref}
+        {...props}
+      />
+    )
+  }
+)
+Button.displayName = "Button"
+
+export { Button, buttonVariants }
+--- END OF FILE ---
+
+FILE: src/components/ui/alert-dialog.tsx
+--- START OF FILE ---
+import * as React from "react"
+import * as AlertDialogPrimitive from "@radix-ui/react-alert-dialog"
+
+import { cn } from "@/lib/utils"
+import { buttonVariants } from "@/components/ui/button"
+
+const AlertDialog = AlertDialogPrimitive.Root
+
+const AlertDialogTrigger = AlertDialogPrimitive.Trigger
+
+const AlertDialogPortal = AlertDialogPrimitive.Portal
+
+const AlertDialogOverlay = React.forwardRef<
+  React.ElementRef<typeof AlertDialogPrimitive.Overlay>,
+  React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Overlay>
+>(({ className, ...props }, ref) => (
+  <AlertDialogPrimitive.Overlay
+    className={cn(
+      "fixed inset-0 z-50 bg-black/80  data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+      className
+    )}
+    {...props}
+    ref={ref}
+  />
+))
+AlertDialogOverlay.displayName = AlertDialogPrimitive.Overlay.displayName
+
+const AlertDialogContent = React.forwardRef<
+  React.ElementRef<typeof AlertDialogPrimitive.Content>,
+  React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Content>
+>(({ className, ...props }, ref) => (
+  <AlertDialogPortal>
+    <AlertDialogOverlay />
+    <AlertDialogPrimitive.Content
+      ref={ref}
+      className={cn(
+        "fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg",
+        className
+      )}
+      {...props}
+    />
+  </AlertDialogPortal>
+))
+AlertDialogContent.displayName = AlertDialogPrimitive.Content.displayName
+
+const AlertDialogHeader = ({
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement>) => (
+  <div
+    className={cn(
+      "flex flex-col space-y-2 text-center sm:text-left",
+      className
+    )}
+    {...props}
+  />
+)
+AlertDialogHeader.displayName = "AlertDialogHeader"
+
+const AlertDialogFooter = ({
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement>) => (
+  <div
+    className={cn(
+      "flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2",
+      className
+    )}
+    {...props}
+  />
+)
+AlertDialogFooter.displayName = "AlertDialogFooter"
+
+const AlertDialogTitle = React.forwardRef<
+  React.ElementRef<typeof AlertDialogPrimitive.Title>,
+  React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Title>
+>(({ className, ...props }, ref) => (
+  <AlertDialogPrimitive.Title
+    ref={ref}
+    className={cn("text-lg font-semibold", className)}
+    {...props}
+  />
+))
+AlertDialogTitle.displayName = AlertDialogPrimitive.Title.displayName
+
+const AlertDialogDescription = React.forwardRef<
+  React.ElementRef<typeof AlertDialogPrimitive.Description>,
+  React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Description>
+>(({ className, ...props }, ref) => (
+  <AlertDialogPrimitive.Description
+    ref={ref}
+    className={cn("text-sm text-muted-foreground", className)}
+    {...props}
+  />
+))
+AlertDialogDescription.displayName =
+  AlertDialogPrimitive.Description.displayName
+
+const AlertDialogAction = React.forwardRef<
+  React.ElementRef<typeof AlertDialogPrimitive.Action>,
+  React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Action>
+>(({ className, ...props }, ref) => (
+  <AlertDialogPrimitive.Action
+    ref={ref}
+    className={cn(buttonVariants(), className)}
+    {...props}
+  />
+))
+AlertDialogAction.displayName = AlertDialogPrimitive.Action.displayName
+
+const AlertDialogCancel = React.forwardRef<
+  React.ElementRef<typeof AlertDialogPrimitive.Cancel>,
+  React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Cancel>
+>(({ className, ...props }, ref) => (
+  <AlertDialogPrimitive.Cancel
+    ref={ref}
+    className={cn(
+      buttonVariants({ variant: "outline" }),
+      "mt-2 sm:mt-0",
+      className
+    )}
+    {...props}
+  />
+))
+AlertDialogCancel.displayName = AlertDialogPrimitive.Cancel.displayName
+
+export {
+  AlertDialog,
+  AlertDialogPortal,
+  AlertDialogOverlay,
+  AlertDialogTrigger,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogFooter,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogAction,
+  AlertDialogCancel,
+}
+--- END OF FILE ---
+
+FILE: src/components/ui/use-toast.ts
+--- START OF FILE ---
+import { useToast, toast } from "@/hooks/use-toast";
+
+export { useToast, toast };
+--- END OF FILE ---
+
+FILE: src/components/ui/toast.tsx
+--- START OF FILE ---
+import * as React from "react"
+import * as ToastPrimitives from "@radix-ui/react-toast"
+import { cva, type VariantProps } from "class-variance-authority"
+import { X } from "lucide-react"
+
+import { cn } from "@/lib/utils"
+
+const ToastProvider = ToastPrimitives.Provider
+
+const ToastViewport = React.forwardRef<
+  React.ElementRef<typeof ToastPrimitives.Viewport>,
+  React.ComponentPropsWithoutRef<typeof ToastPrimitives.Viewport>
+>(({ className, ...props }, ref) => (
+  <ToastPrimitives.Viewport
+    ref={ref}
+    className={cn(
+      "fixed top-0 z-[100] flex max-h-screen w-full flex-col-reverse p-4 sm:bottom-0 sm:right-0 sm:top-auto sm:flex-col md:max-w-[420px]",
+      className
+    )}
+    {...props}
+  />
+))
+ToastViewport.displayName = ToastPrimitives.Viewport.displayName
+
+const toastVariants = cva(
+  "group pointer-events-auto relative flex w-full items-center justify-between space-x-4 overflow-hidden rounded-md border p-6 pr-8 shadow-lg transition-all data-[swipe=cancel]:translate-x-0 data-[swipe=end]:translate-x-[var(--radix-toast-swipe-end-x)] data-[swipe=move]:translate-x-[var(--radix-toast-swipe-move-x)] data-[swipe=move]:transition-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[swipe=end]:animate-out data-[state=closed]:fade-out-80 data-[state=closed]:slide-out-to-right-full data-[state=open]:slide-in-from-top-full data-[state=open]:sm:slide-in-from-bottom-full",
+  {
+    variants: {
+      variant: {
+        default: "border bg-background text-foreground",
+        destructive:
+          "destructive group border-destructive bg-destructive text-destructive-foreground",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+    },
+  }
+)
+
+const Toast = React.forwardRef<
+  React.ElementRef<typeof ToastPrimitives.Root>,
+  React.ComponentPropsWithoutRef<typeof ToastPrimitives.Root> &
+    VariantProps<typeof toastVariants>
+>(({ className, variant, ...props }, ref) => {
+  return (
+    <ToastPrimitives.Root
+      ref={ref}
+      className={cn(toastVariants({ variant }), className)}
+      {...props}
+    />
+  )
+})
+Toast.displayName = ToastPrimitives.Root.displayName
+
+const ToastAction = React.forwardRef<
+  React.ElementRef<typeof ToastPrimitives.Action>,
+  React.ComponentPropsWithoutRef<typeof ToastPrimitives.Action>
+>(({ className, ...props }, ref) => (
+  <ToastPrimitives.Action
+    ref={ref}
+    className={cn(
+      "inline-flex h-8 shrink-0 items-center justify-center rounded-md border bg-transparent px-3 text-sm font-medium ring-offset-background transition-colors hover:bg-secondary focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 group-[.destructive]:border-muted/40 group-[.destructive]:hover:border-destructive/30 group-[.destructive]:hover:bg-destructive group-[.destructive]:hover:text-destructive-foreground group-[.destructive]:focus:ring-destructive",
+      className
+    )}
+    {...props}
+  />
+))
+ToastAction.displayName = ToastPrimitives.Action.displayName
+
+const ToastClose = React.forwardRef<
+  React.ElementRef<typeof ToastPrimitives.Close>,
+  React.ComponentPropsWithoutRef<typeof ToastPrimitives.Close>
+>(({ className, ...props }, ref) => (
+  <ToastPrimitives.Close
+    ref={ref}
+    className={cn(
+      "absolute right-2 top-2 rounded-md p-1 text-foreground/50 opacity-0 transition-opacity hover:text-foreground focus:opacity-100 focus:outline-none focus:ring-2 group-hover:opacity-100 group-[.destructive]:text-red-300 group-[.destructive]:hover:text-red-50 group-[.destructive]:focus:ring-red-400 group-[.destructive]:focus:ring-offset-red-600",
+      className
+    )}
+    toast-close=""
+    {...props}
+  >
+    <X className="h-4 w-4" />
+  </ToastPrimitives.Close>
+))
+ToastClose.displayName = ToastPrimitives.Close.displayName
+
+const ToastTitle = React.forwardRef<
+  React.ElementRef<typeof ToastPrimitives.Title>,
+  React.ComponentPropsWithoutRef<typeof ToastPrimitives.Title>
+>(({ className, ...props }, ref) => (
+  <ToastPrimitives.Title
+    ref={ref}
+    className={cn("text-sm font-semibold", className)}
+    {...props}
+  />
+))
+ToastTitle.displayName = ToastPrimitives.Title.displayName
+
+const ToastDescription = React.forwardRef<
+  React.ElementRef<typeof ToastPrimitives.Description>,
+  React.ComponentPropsWithoutRef<typeof ToastPrimitives.Description>
+>(({ className, ...props }, ref) => (
+  <ToastPrimitives.Description
+    ref={ref}
+    className={cn("text-sm opacity-90", className)}
+    {...props}
+  />
+))
+ToastDescription.displayName = ToastPrimitives.Description.displayName
+
+type ToastProps = React.ComponentPropsWithoutRef<typeof Toast>
+
+type ToastActionElement = React.ReactElement<typeof ToastAction>
+
+export {
+  type ToastProps,
+  type ToastActionElement,
+  ToastProvider,
+  ToastViewport,
+  Toast,
+  ToastTitle,
+  ToastDescription,
+  ToastClose,
+  ToastAction,
+}
+--- END OF FILE ---
+
+FILE: src/components/ui/toaster.tsx
+--- START OF FILE ---
+import { useToast } from "@/hooks/use-toast"
+import {
+  Toast,
+  ToastClose,
+  ToastDescription,
+  ToastProvider,
+  ToastTitle,
+  ToastViewport,
+} from "@/components/ui/toast"
+
+export function Toaster() {
+  const { toasts } = useToast()
+
+  return (
+    <ToastProvider>
+      {toasts.map(function ({ id, title, description, action, ...props }) {
+        return (
+          <Toast key={id} {...props}>
+            <div className="grid gap-1">
+              {title && <ToastTitle>{title}</ToastTitle>}
+              {description && (
+                <ToastDescription>{description}</ToastDescription>
+              )}
+            </div>
+            {action}
+            <ToastClose />
+          </Toast>
+        )
+      })}
+      <ToastViewport />
+    </ToastProvider>
+  )
+}
+--- END OF FILE ---
+
+FILE: src/App.tsx
+--- START OF FILE ---
+// src/App.tsx
+import React from 'react';
+import { Toaster } from "@/components/ui/toaster";
+import { Toaster as Sonner } from "@/components/ui/sonner";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { Routes, Route, Navigate } from "react-router-dom";
+import { ThemeProvider } from "@/contexts/ThemeContext";
+import { useAuth } from "@/contexts/AuthContext";
+import Index from "./pages/Index";
+import NotFound from "./pages/NotFound";
+import LoginScreen from "@/components/auth/LoginScreen";
+import Dashboard from "@/components/dashboard/Dashboard";
+import ResultsScreen from "@/components/results/ResultsScreen";
+import CommunitiesScreen from "@/components/communities/CommunitiesScreen";
+import CommunityDetailScreen from "@/components/communities/CommunityDetailScreen";
+import AttendanceScreen from "@/components/attendance/AttendanceScreen";
+import ResourcesScreen from "@/components/resources/ResourcesScreen";
+import SettingsScreen from "@/components/settings/SettingsScreen";
+import CreateResourceScreen from "@/components/resources/CreateResourceScreen";
+import PostDetailScreen from '@/components/posts/PostDetailScreen'; // <--- IMPORT THE NEW SCREEN
+
+const queryClient = new QueryClient();
+
+const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
+  const { isAuthenticated, isLoading } = useAuth();
+
+  if (isLoading) {
+    return <div className="flex items-center justify-center min-h-screen">Loading Session...</div>;
+  }
+  return isAuthenticated ? <>{children}</> : <Navigate to="/" replace />;
+};
+
+const AppRoutes = () => {
+  return (
+    <Routes>
+      <Route path="/" element={<Index />} />
+      <Route path="/login/student" element={<LoginScreen />} />
+      <Route path="/register" element={<div className="min-h-screen flex items-center justify-center">Registration coming soon!</div>} />
+
+      {/* Protected Routes */}
+      <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+      <Route path="/results" element={<ProtectedRoute><ResultsScreen /></ProtectedRoute>} />
+      <Route path="/communities" element={<ProtectedRoute><CommunitiesScreen /></ProtectedRoute>} />
+      <Route path="/communities/:communityId" element={<ProtectedRoute><CommunityDetailScreen /></ProtectedRoute>} />
+      
+      {/* --- ADD OR CONFIRM THIS ROUTE FOR POST DETAIL --- */}
+      <Route 
+        path="/posts/:postId" 
+        element={
+          <ProtectedRoute> {/* Or make it public if posts can be viewed without login */}
+            <PostDetailScreen />
+          </ProtectedRoute>
+        } 
+      />
+      {/* ------------------------------------------------- */}
+
+      <Route path="/attendance" element={<ProtectedRoute><AttendanceScreen /></ProtectedRoute>} />
+      <Route path="/resources" element={<ProtectedRoute><ResourcesScreen /></ProtectedRoute>} />
+      <Route path="/resources/new" element={<ProtectedRoute><CreateResourceScreen /></ProtectedRoute>} />
+      <Route path="/settings" element={<ProtectedRoute><SettingsScreen /></ProtectedRoute>} />
+
+      <Route path="*" element={<NotFound />} />
+    </Routes>
+  );
+};
+
+const App = () => (
+  <QueryClientProvider client={queryClient}>
+    <ThemeProvider defaultTheme="light" storageKey="vite-ui-theme">
+      <TooltipProvider>
+        <Toaster />
+        <Sonner />
+        <AppRoutes />
+      </TooltipProvider>
+    </ThemeProvider>
+  </QueryClientProvider>
+);
+
+export default App;--- END OF FILE ---
+
+FILE: src/hooks/use-toast.ts
+--- START OF FILE ---
+import * as React from "react"
+
+import type {
+  ToastActionElement,
+  ToastProps,
+} from "@/components/ui/toast"
+
+const TOAST_LIMIT = 1
+const TOAST_REMOVE_DELAY = 1000000
+
+type ToasterToast = ToastProps & {
+  id: string
+  title?: React.ReactNode
+  description?: React.ReactNode
+  action?: ToastActionElement
+}
+
+const actionTypes = {
+  ADD_TOAST: "ADD_TOAST",
+  UPDATE_TOAST: "UPDATE_TOAST",
+  DISMISS_TOAST: "DISMISS_TOAST",
+  REMOVE_TOAST: "REMOVE_TOAST",
+} as const
+
+let count = 0
+
+function genId() {
+  count = (count + 1) % Number.MAX_SAFE_INTEGER
+  return count.toString()
+}
+
+type ActionType = typeof actionTypes
+
+type Action =
+  | {
+      type: ActionType["ADD_TOAST"]
+      toast: ToasterToast
+    }
+  | {
+      type: ActionType["UPDATE_TOAST"]
+      toast: Partial<ToasterToast>
+    }
+  | {
+      type: ActionType["DISMISS_TOAST"]
+      toastId?: ToasterToast["id"]
+    }
+  | {
+      type: ActionType["REMOVE_TOAST"]
+      toastId?: ToasterToast["id"]
+    }
+
+interface State {
+  toasts: ToasterToast[]
+}
+
+const toastTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
+
+const addToRemoveQueue = (toastId: string) => {
+  if (toastTimeouts.has(toastId)) {
+    return
+  }
+
+  const timeout = setTimeout(() => {
+    toastTimeouts.delete(toastId)
+    dispatch({
+      type: "REMOVE_TOAST",
+      toastId: toastId,
+    })
+  }, TOAST_REMOVE_DELAY)
+
+  toastTimeouts.set(toastId, timeout)
+}
+
+export const reducer = (state: State, action: Action): State => {
+  switch (action.type) {
+    case "ADD_TOAST":
+      return {
+        ...state,
+        toasts: [action.toast, ...state.toasts].slice(0, TOAST_LIMIT),
+      }
+
+    case "UPDATE_TOAST":
+      return {
+        ...state,
+        toasts: state.toasts.map((t) =>
+          t.id === action.toast.id ? { ...t, ...action.toast } : t
+        ),
+      }
+
+    case "DISMISS_TOAST": {
+      const { toastId } = action
+
+      // ! Side effects ! - This could be extracted into a dismissToast() action,
+      // but I'll keep it here for simplicity
+      if (toastId) {
+        addToRemoveQueue(toastId)
+      } else {
+        state.toasts.forEach((toast) => {
+          addToRemoveQueue(toast.id)
+        })
+      }
+
+      return {
+        ...state,
+        toasts: state.toasts.map((t) =>
+          t.id === toastId || toastId === undefined
+            ? {
+                ...t,
+                open: false,
+              }
+            : t
+        ),
+      }
+    }
+    case "REMOVE_TOAST":
+      if (action.toastId === undefined) {
+        return {
+          ...state,
+          toasts: [],
+        }
+      }
+      return {
+        ...state,
+        toasts: state.toasts.filter((t) => t.id !== action.toastId),
+      }
+  }
+}
+
+const listeners: Array<(state: State) => void> = []
+
+let memoryState: State = { toasts: [] }
+
+function dispatch(action: Action) {
+  memoryState = reducer(memoryState, action)
+  listeners.forEach((listener) => {
+    listener(memoryState)
+  })
+}
+
+type Toast = Omit<ToasterToast, "id">
+
+function toast({ ...props }: Toast) {
+  const id = genId()
+
+  const update = (props: ToasterToast) =>
+    dispatch({
+      type: "UPDATE_TOAST",
+      toast: { ...props, id },
+    })
+  const dismiss = () => dispatch({ type: "DISMISS_TOAST", toastId: id })
+
+  dispatch({
+    type: "ADD_TOAST",
+    toast: {
+      ...props,
+      id,
+      open: true,
+      onOpenChange: (open) => {
+        if (!open) dismiss()
+      },
+    },
+  })
+
+  return {
+    id: id,
+    dismiss,
+    update,
+  }
+}
+
+function useToast() {
+  const [state, setState] = React.useState<State>(memoryState)
+
+  React.useEffect(() => {
+    listeners.push(setState)
+    return () => {
+      const index = listeners.indexOf(setState)
+      if (index > -1) {
+        listeners.splice(index, 1)
+      }
+    }
+  }, [state])
+
+  return {
+    ...state,
+    toast,
+    dismiss: (toastId?: string) => dispatch({ type: "DISMISS_TOAST", toastId }),
+  }
+}
+
+export { useToast, toast }
+--- END OF FILE ---
+
+-------------------------------------------------
+END OF DUMP
+-------------------------------------------------

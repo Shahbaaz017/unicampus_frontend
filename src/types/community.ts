@@ -1,24 +1,16 @@
 // src/types/community.ts
 
 export interface Author {
-  id: string;
+  id: string; // Primary ID used in frontend, critical for ownership checks
   _id?: string;
   name: string;
+  usn?: string;
   avatarUrl?: string;
 }
 
-// For API responses that might use snake_case
-interface CommunityApiSnakeCase {
-  banner_image_url?: string | null;
-  icon_url?: string | null;
-  created_at?: string;
-  updated_at?: string;
-  member_count?: number;
-  post_count?: number | null;
-  is_member?: boolean;
-}
-
-export interface CommunityBase extends CommunityApiSnakeCase {
+// Community types (assuming these are already well-defined from previous steps)
+interface CommunityApiSnakeCase { /* ... */ }
+export interface CommunityBase extends CommunityApiSnakeCase { /* ... id, name, etc. ... */
   id: string;
   _id?: string;
   name: string;
@@ -33,26 +25,15 @@ export interface CommunityBase extends CommunityApiSnakeCase {
   rules?: string[];
   createdAt?: string;
   updatedAt?: string;
-  createdBy?: string;
+  createdBy?: string; // Should be Author or at least user ID string
 }
-
 export interface CommunitySummary extends CommunityBase {}
 export interface CommunityDetail extends CommunityBase {}
 
-interface PostApiSnakeCase {
-    content_type?: 'text' | 'image' | 'link';
-    content_text?: string;
-    image_url?: string;
-    link_url?: string;
-    created_at?: string;
-    updated_at?: string;
-    comment_count?: number;
-    user_vote?: 'up' | 'down' | null;
-    last_activity_at?: string;
-}
-
+// Post types
+interface PostApiSnakeCase { /* ... */ }
 export interface Post extends PostApiSnakeCase {
-  id: string;
+  id: string; // Critical for API calls
   _id?: string;
   title: string;
   contentType: 'text' | 'image' | 'link';
@@ -61,7 +42,7 @@ export interface Post extends PostApiSnakeCase {
   imageUrl?: string;
   linkUrl?: string;
   tags?: string[];
-  author: Author;
+  author: Author; // Critical: must have author.id for ownership checks
   communityId: string;
   communityName?: string;
   communitySlug?: string;
@@ -76,12 +57,12 @@ export interface Post extends PostApiSnakeCase {
   lastActivityAt?: string;
 }
 
-// --- Comment Types ---
+// Comment types
 export interface Comment {
-  id: string;
+  id: string; // Critical
   _id?: string;
   postId: string;
-  author: Author;
+  author: Author; // Critical: must have author.id for ownership checks
   text: string;
   parentId?: string | null;
   replyCount: number;
@@ -90,67 +71,19 @@ export interface Comment {
   createdAt: string;
   updatedAt?: string;
   userVote: 'up' | 'down' | null;
-  // For API responses that might use snake_case
+  // Allow potential snake_case fields from API before normalization
   created_at?: string;
   updated_at?: string;
   parent_id?: string | null;
   reply_count?: number;
-  user_vote?: 'up' | 'down' | null; // API might send snake_case
+  user_vote?: 'up' | 'down' | null;
 }
-
 
 // --- API Response Structures ---
-export interface CommunityDetailApiResponse {
-  status: string;
-  data: {
-    community: CommunityDetail;
-  };
-}
-
-export interface VoteApiResponse {
-  status: string;
-  data: {
-    upvotes: number;
-    downvotes: number;
-    user_vote: 'up' | 'down' | null; // API sends snake_case
-  };
-}
-
-export interface JoinLeaveApiResponse {
-    status: string;
-    message?: string;
-    data?: {
-        community: CommunityDetail;
-    };
-}
-
-export interface CreatePostApiResponse {
-  status: string;
-  data: {
-    post: Post;
-  };
-}
-
-export interface PostDetailApiResponse {
-  status: string;
-  data: {
-    post: Post;
-  };
-}
-
-export interface CreateCommentApiResponse {
-  status: string;
-  data: {
-    comment: Comment;
-  };
-}
-
-// For PaginatedResponse<Comment> - make sure PaginatedResponse in apiClient.ts allows for optional 'message'
-// Example for PaginatedResponse in apiClient.ts if not already done:
-// export interface PaginatedResponse<T> {
-//   status: string;
-//   message?: string; // Optional message field
-//   results?: number;
-//   data: T[];
-//   pagination?: { /* ... */ };
-// }
+export interface CommunityDetailApiResponse { status: string; data: { community: CommunityDetail; }; }
+export interface VoteApiResponse { status: string; data: { upvotes: number; downvotes: number; user_vote: 'up' | 'down' | null; }; }
+export interface JoinLeaveApiResponse { status: string; message?: string; data?: { community: CommunityDetail; }; }
+export interface CreatePostApiResponse { status: string; data: { post: Post; }; }
+export interface PostDetailApiResponse { status: string; data: { post: Post; }; }
+export interface CreateCommentApiResponse { status: string; data: { comment: Comment; }; }
+export interface DeleteApiResponse { status: string; message?: string; } // Generic for delete operations
